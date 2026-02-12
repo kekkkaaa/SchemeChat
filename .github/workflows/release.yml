@@ -135,6 +135,9 @@ jobs:
       - name: Create version-less copies for permanent URLs
         run: |
           cd artifacts
+          # Remove problematic builder-debug.yml files to avoid conflicts
+          find . -name "builder-debug.yml" -delete
+          
           # macOS
           cp macos-build/*.dmg macos-build/polygpt.dmg || true
           # Windows
@@ -147,6 +150,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          overwrite: true
           files: |
             artifacts/macos-build/*
             artifacts/windows-build/*
