@@ -68,7 +68,7 @@ const submitMessage = createSubmitHandler(
   null
 );
 
-setupIPCListeners(provider, config, injectText, submitMessage, { value: lastText });
+setupIPCListeners(provider, config, injectText, submitMessage);
 
 setupInputScanner(
   provider,

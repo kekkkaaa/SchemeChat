@@ -67,9 +67,11 @@ function createSubmitHandler(provider, config, getInputElement, getSubmitElement
   };
 }
 
-function setupIPCListeners(provider, config, injectTextFn, submitFn, lastText) {
+function setupIPCListeners(provider, config, injectTextFn, submitFn) {
+  let lastSentText = null;
   ipcRenderer.on('text-update', (event, text) => {
-    if (text !== lastText.value) {
+    if (text !== lastSentText) {
+      lastSentText = text;
       injectTextFn(text);
     }
   });
