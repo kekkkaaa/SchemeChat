@@ -8,8 +8,13 @@ const CONTROL_BAR_HEIGHT = 100;
 const PANE_GAP = 1;
 const DEFAULT_LAYOUT_MODE = 'grid';
 const LAYOUT_MODES = ['grid', 'columns', 'rows'];
+const DEFAULT_SETTINGS_WINDOW_WIDTH = 900;
+const DEFAULT_SETTINGS_WINDOW_HEIGHT = 620;
+const SETTINGS_WINDOW_MIN_WIDTH = 760;
+const SETTINGS_WINDOW_MIN_HEIGHT = 520;
 const LAYOUT_CONFIG_PATH = path.join(__dirname, '../../config/window-layout.json');
 const LEGACY_PROVIDER_CONFIG_PATH = path.join(__dirname, '../../config/window-providers.json');
+const SETTINGS_WINDOW_CONFIG_PATH = path.join(__dirname, '../../config/settings-window.json');
 
 function safeConsoleWrite(method, ...args) {
   const stream = method === 'error' ? process.stderr : process.stdout;
@@ -192,6 +197,43 @@ function saveLayoutConfig(layoutState) {
     );
   } catch (error) {
     safeError('Failed to save layout config:', error);
+  }
+}
+
+function loadSettingsWindowConfig() {
+  const parsed = loadJsonFile(SETTINGS_WINDOW_CONFIG_PATH);
+  if (!parsed) {
+    return {
+      width: DEFAULT_SETTINGS_WINDOW_WIDTH,
+      height: DEFAULT_SETTINGS_WINDOW_HEIGHT,
+    };
+  }
+
+  const width = Number.parseInt(parsed.width, 10);
+  const height = Number.parseInt(parsed.height, 10);
+
+  return {
+    width: Number.isFinite(width) ? Math.max(width, SETTINGS_WINDOW_MIN_WIDTH) : DEFAULT_SETTINGS_WINDOW_WIDTH,
+    height: Number.isFinite(height) ? Math.max(height, SETTINGS_WINDOW_MIN_HEIGHT) : DEFAULT_SETTINGS_WINDOW_HEIGHT,
+  };
+}
+
+function saveSettingsWindowConfig(bounds) {
+  try {
+    ensureDirectory(SETTINGS_WINDOW_CONFIG_PATH);
+    fs.writeFileSync(
+      SETTINGS_WINDOW_CONFIG_PATH,
+      JSON.stringify(
+        {
+          width: Math.max(Math.floor(bounds.width), SETTINGS_WINDOW_MIN_WIDTH),
+          height: Math.max(Math.floor(bounds.height), SETTINGS_WINDOW_MIN_HEIGHT),
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    safeError('Failed to save settings window config:', error);
   }
 }
 
@@ -689,14 +731,16 @@ async function createWindow() {
       return settingsWindow;
     }
 
+    const settingsWindowConfig = loadSettingsWindowConfig();
+
     settingsWindow = new BrowserWindow({
       parent: mainWindow,
       modal: true,
       show: false,
-      width: 900,
-      height: 620,
-      minWidth: 760,
-      minHeight: 520,
+      width: settingsWindowConfig.width,
+      height: settingsWindowConfig.height,
+      minWidth: SETTINGS_WINDOW_MIN_WIDTH,
+      minHeight: SETTINGS_WINDOW_MIN_HEIGHT,
       resizable: true,
       minimizable: false,
       maximizable: false,
@@ -721,6 +765,15 @@ async function createWindow() {
       settingsWindow.center();
       settingsWindow.show();
       settingsWindow.focus();
+    });
+
+    settingsWindow.on('resize', () => {
+      if (!settingsWindow || settingsWindow.isDestroyed()) {
+        return;
+      }
+
+      const [width, height] = settingsWindow.getSize();
+      saveSettingsWindowConfig({ width, height });
     });
 
     settingsWindow.on('closed', () => {

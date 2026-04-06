@@ -4,7 +4,7 @@
   "panes": [
     {
       "id": "pane-1",
-      "providerKey": "chatgpt"
+      "providerKey": "grok"
     },
     {
       "id": "pane-2",
