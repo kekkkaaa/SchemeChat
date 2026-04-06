@@ -16,11 +16,28 @@
         spellcheck="true"
       ></textarea>
       <div class="input-info">
-        <span><span id="charCount">0</span> characters</span>
-        <span><kbd>Enter</kbd> to submit | <kbd>Shift+Enter</kbd> for new line</span>
+        <div class="info-group">
+          <span><span id="charCount">0</span> characters</span>
+          <span><kbd>Enter</kbd> to submit | <kbd>Shift+Enter</kbd> for new line</span>
+          <span id="syncStatus" class="sync-status">Ready to sync latest replies</span>
+        </div>
         <div class="button-group">
-          <button id="newChatBtn" class="action-btn new-chat-btn" title="Start new chat in both">✨ New Chat</button>
-          <button id="refreshBtn" class="action-btn refresh-btn" title="Refresh both pages">🔄 Refresh</button>
+          <button id="newChatBtn" class="action-btn new-chat-btn" title="Start new chat in both">
+            <span class="btn-icon" aria-hidden="true">✦</span>
+            <span>New Chat</span>
+          </button>
+          <button id="syncBtn" class="action-btn sync-btn" title="Capture both latest replies and cross-sync them">
+            <span class="btn-icon" aria-hidden="true">⇄</span>
+            <span>Sync</span>
+          </button>
+          <button id="sendBtn" class="action-btn send-btn" title="Send current input to both panes">
+            <span class="btn-icon" aria-hidden="true">➤</span>
+            <span>Send</span>
+          </button>
+          <button id="refreshBtn" class="action-btn refresh-btn" title="Refresh both pages">
+            <span class="btn-icon" aria-hidden="true">↻</span>
+            <span>Refresh</span>
+          </button>
           <button id="zoomOutBtn" class="action-btn zoom-btn zoom-out-btn" title="Zoom out">−</button>
           <button id="zoomInBtn" class="action-btn zoom-btn zoom-in-btn" title="Zoom in">+</button>
         </div>

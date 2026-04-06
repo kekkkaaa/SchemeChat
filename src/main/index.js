@@ -1,5 +1,6 @@
 const { app, ipcMain, session, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const { buildDiscussionPrompt, captureStableLatestReply } = require('./provider-sync');
 const windowManager = require('./window-manager');
 
 let mainWindow;
@@ -18,6 +19,34 @@ let currentZoomFactor = 1.0;
   });
 });
 
+function hideNativeAppMenu(targetWindow) {
+  Menu.setApplicationMenu(null);
+
+  if (!targetWindow) {
+    return;
+  }
+
+  if (typeof targetWindow.setAutoHideMenuBar === 'function') {
+    targetWindow.setAutoHideMenuBar(true);
+  }
+
+  if (typeof targetWindow.setMenuBarVisibility === 'function') {
+    targetWindow.setMenuBarVisibility(false);
+  }
+
+  if (typeof targetWindow.removeMenu === 'function') {
+    targetWindow.removeMenu();
+  }
+}
+
+function getProviderDisplayName(view) {
+  return windowManager.PROVIDERS[view?.providerKey]?.name || view?.providerKey || 'Unknown Provider';
+}
+
+function getPaneEntries() {
+  return mainWindow?.getPaneEntries ? mainWindow.getPaneEntries() : [];
+}
+
 app.on('ready', async () => {
   // Handle permissions for media (microphone)
   session.fromPartition('persist:shared').setPermissionRequestHandler((webContents, permission, callback) => {
@@ -35,67 +64,10 @@ app.on('ready', async () => {
     return false;
   });
 
-  // Create standard application menu for macOS compatibility (Copy/Paste shortcuts)
-  const template = [
-    {
-      label: app.name,
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'services' },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'pasteAndMatchStyle' },
-        { role: 'delete' },
-        { role: 'selectAll' }
-      ]
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' }
-      ]
-    },
-    {
-      label: 'Window',
-      submenu: [
-        { role: 'minimize' },
-        { role: 'zoom' },
-        { type: 'separator' },
-        { role: 'front' },
-        { type: 'separator' },
-        { role: 'window' }
-      ]
-    }
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
+  hideNativeAppMenu();
 
   mainWindow = await windowManager.createWindow();
+  hideNativeAppMenu(mainWindow);
 
   // Check for updates
   autoUpdater.checkForUpdatesAndNotify();
@@ -103,19 +75,19 @@ app.on('ready', async () => {
   // IPC handler for text updates from renderer
   ipcMain.handle('send-text-update', async (event, text) => {
     const supersizedPosition = mainWindow.getSupersizedPosition ? mainWindow.getSupersizedPosition() : null;
+    const paneEntries = getPaneEntries();
 
     // If supersized, only send to that position
     if (supersizedPosition) {
-      const view = mainWindow.viewPositions[supersizedPosition];
-      if (view && view.webContents) {
-        view.webContents.send('text-update', text);
+      const supersizedPane = paneEntries.find((paneEntry) => paneEntry.id === supersizedPosition);
+      if (supersizedPane?.view?.webContents) {
+        supersizedPane.view.webContents.send('text-update', text);
       }
     } else {
       // Send text to all positions
-      windowManager.POSITIONS.forEach(pos => {
-        const view = mainWindow.viewPositions[pos];
-        if (view && view.webContents) {
-          view.webContents.send('text-update', text);
+      paneEntries.forEach((paneEntry) => {
+        if (paneEntry.view && paneEntry.view.webContents) {
+          paneEntry.view.webContents.send('text-update', text);
         }
       });
     }
@@ -127,20 +99,131 @@ app.on('ready', async () => {
     }
   });
 
+  ipcMain.handle('open-settings-modal', async () => {
+    if (mainWindow && typeof mainWindow.openSettingsModal === 'function') {
+      mainWindow.openSettingsModal();
+      return true;
+    }
+    return false;
+  });
+
+  ipcMain.handle('close-settings-modal', async () => {
+    if (mainWindow && typeof mainWindow.closeSettingsModal === 'function') {
+      mainWindow.closeSettingsModal();
+      return true;
+    }
+    return false;
+  });
+
+  ipcMain.handle('get-settings-state', async () => {
+    if (mainWindow && typeof mainWindow.getLayoutSettingsState === 'function') {
+      return mainWindow.getLayoutSettingsState();
+    }
+
+    return {
+      paneCount: 2,
+      layoutMode: windowManager.DEFAULT_LAYOUT_MODE,
+      layoutModes: windowManager.LAYOUT_MODES.map((mode) => ({
+        key: mode,
+        label: mode,
+      })),
+      panes: [],
+    };
+  });
+
+  ipcMain.handle('apply-settings-layout', async (event, nextSettings) => {
+    if (mainWindow && typeof mainWindow.applyLayoutSettings === 'function') {
+      return mainWindow.applyLayoutSettings(nextSettings);
+    }
+
+    return null;
+  });
+
+  ipcMain.handle('sync-latest-round', async () => {
+    const paneEntries = getPaneEntries();
+    if (paneEntries.length !== 2) {
+      return {
+        ok: false,
+        message: 'Sync currently supports exactly 2 panes.',
+      };
+    }
+
+    const [leftPane, rightPane] = paneEntries;
+    const leftView = leftPane.view;
+    const rightView = rightPane.view;
+
+    const [leftResult, rightResult] = await Promise.all([
+      captureStableLatestReply(leftView),
+      captureStableLatestReply(rightView),
+    ]);
+
+    if (!leftResult.ok) {
+      return {
+        ok: false,
+        message: `${getProviderDisplayName(leftView)} sync failed: ${leftResult.error || 'Unable to inspect the latest reply.'}`,
+      };
+    }
+
+    if (!rightResult.ok) {
+      return {
+        ok: false,
+        message: `${getProviderDisplayName(rightView)} sync failed: ${rightResult.error || 'Unable to inspect the latest reply.'}`,
+      };
+    }
+
+    if (leftResult.busy || rightResult.busy) {
+      const busyProviders = [];
+      if (leftResult.busy) {
+        busyProviders.push(getProviderDisplayName(leftView));
+      }
+      if (rightResult.busy) {
+        busyProviders.push(getProviderDisplayName(rightView));
+      }
+
+      return {
+        ok: false,
+        message: `${busyProviders.join(' and ')} ${busyProviders.length > 1 ? 'are' : 'is'} still replying. Wait for both sides to finish, then sync again.`,
+      };
+    }
+
+    if (!leftResult.latestReplyText || !rightResult.latestReplyText) {
+      return {
+        ok: false,
+        message: 'Sync needs both sides to have a latest reply before it can continue.',
+      };
+    }
+
+    const leftProviderName = getProviderDisplayName(leftView);
+    const rightProviderName = getProviderDisplayName(rightView);
+
+    leftView.webContents.send(
+      'inject-sync-text',
+      buildDiscussionPrompt(rightProviderName, rightResult.latestReplyText)
+    );
+    rightView.webContents.send(
+      'inject-sync-text',
+      buildDiscussionPrompt(leftProviderName, leftResult.latestReplyText)
+    );
+
+    return {
+      ok: true,
+      message: `Synced the latest ${leftProviderName} and ${rightProviderName} replies into the opposite input boxes.`,
+    };
+  });
+
   ipcMain.handle('rescan-selectors', async (event) => {
-    windowManager.POSITIONS.forEach(pos => {
-      const view = mainWindow.viewPositions[pos];
-      if (view && view.webContents) {
-        view.webContents.reload();
+    getPaneEntries().forEach((paneEntry) => {
+      if (paneEntry.view && paneEntry.view.webContents) {
+        paneEntry.view.webContents.reload();
       }
     });
     return true;
   });
 
   ipcMain.handle('refresh-pages', async (event) => {
-    const reloadPromises = windowManager.POSITIONS.map(pos => {
+    const reloadPromises = getPaneEntries().map((paneEntry) => {
       return new Promise((resolve) => {
-        const view = mainWindow.viewPositions[pos];
+        const view = paneEntry.view;
         if (view && view.webContents) {
           const onLoad = () => {
             view.webContents.setZoomFactor(currentZoomFactor);
@@ -161,19 +244,19 @@ app.on('ready', async () => {
   // Handle submit message request
   ipcMain.handle('submit-message', async (event) => {
     const supersizedPosition = mainWindow.getSupersizedPosition ? mainWindow.getSupersizedPosition() : null;
+    const paneEntries = getPaneEntries();
 
     // If supersized, only submit to that position
     if (supersizedPosition) {
-      const view = mainWindow.viewPositions[supersizedPosition];
-      if (view && view.webContents) {
-        view.webContents.send('submit-message');
+      const supersizedPane = paneEntries.find((paneEntry) => paneEntry.id === supersizedPosition);
+      if (supersizedPane?.view?.webContents) {
+        supersizedPane.view.webContents.send('submit-message');
       }
     } else {
       // Submit to all positions
-      windowManager.POSITIONS.forEach(pos => {
-        const view = mainWindow.viewPositions[pos];
-        if (view && view.webContents) {
-          view.webContents.send('submit-message');
+      paneEntries.forEach((paneEntry) => {
+        if (paneEntry.view && paneEntry.view.webContents) {
+          paneEntry.view.webContents.send('submit-message');
         }
       });
     }
@@ -182,10 +265,9 @@ app.on('ready', async () => {
 
   // Handle new chat request
   ipcMain.handle('new-chat', async (event) => {
-    windowManager.POSITIONS.forEach(pos => {
-      const view = mainWindow.viewPositions[pos];
-      if (view && view.webContents) {
-        view.webContents.send('new-chat');
+    getPaneEntries().forEach((paneEntry) => {
+      if (paneEntry.view && paneEntry.view.webContents) {
+        paneEntry.view.webContents.send('new-chat');
       }
     });
     return true;
@@ -196,12 +278,9 @@ app.on('ready', async () => {
     const newZoom = Math.min(currentZoomFactor + 0.1, 2.0); // Max 200%
     currentZoomFactor = newZoom;
 
-    windowManager.POSITIONS.forEach(pos => {
-      const view = mainWindow.viewPositions[pos];
-      if (view && view.webContents) {
-        view.webContents.setZoomFactor(newZoom);
-      }
-    });
+    if (mainWindow.setPaneZoomFactor) {
+      mainWindow.setPaneZoomFactor(newZoom);
+    }
 
     return newZoom;
   });
@@ -211,12 +290,9 @@ app.on('ready', async () => {
     const newZoom = Math.max(currentZoomFactor - 0.1, 0.5); // Min 50%
     currentZoomFactor = newZoom;
 
-    windowManager.POSITIONS.forEach(pos => {
-      const view = mainWindow.viewPositions[pos];
-      if (view && view.webContents) {
-        view.webContents.setZoomFactor(newZoom);
-      }
-    });
+    if (mainWindow.setPaneZoomFactor) {
+      mainWindow.setPaneZoomFactor(newZoom);
+    }
 
     return newZoom;
   });
@@ -233,7 +309,7 @@ app.on('ready', async () => {
   // Handle change provider request
   ipcMain.handle('change-provider', async (event, position, newProvider) => {
     if (mainWindow.changeProvider) {
-      return mainWindow.changeProvider(position, newProvider, currentZoomFactor);
+      return mainWindow.changeProvider(position, newProvider);
     }
     return false;
   });
@@ -248,5 +324,6 @@ app.on('window-all-closed', () => {
 app.on('activate', async () => {
   if (mainWindow === null) {
     mainWindow = await windowManager.createWindow();
+    hideNativeAppMenu(mainWindow);
   }
 });

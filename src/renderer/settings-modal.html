@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings</title>
+  <link rel="stylesheet" href="settings-modal.css" />
+</head>
+<body>
+  <div class="modal-shell">
+    <div class="modal-header">
+      <div class="modal-title">Settings</div>
+      <button id="closeBtn" class="close-btn" type="button" aria-label="Close">x</button>
+    </div>
+
+    <div class="modal-body">
+      <aside class="settings-sidebar">
+        <button id="screenTabBtn" class="tab-btn active" type="button">Screen</button>
+      </aside>
+
+      <main class="settings-content">
+        <section id="screenTabPanel" class="tab-panel active">
+          <div class="panel-heading">
+            <div>
+              <h1>Screen</h1>
+              <p>Adjust pane count, layout mode, preview, and apply the result to the main window.</p>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="settings-card">
+              <div class="card-header">
+                <h2>Container Count</h2>
+                <span class="card-hint">No hard cap in code</span>
+              </div>
+              <div class="stepper">
+                <button id="decreaseCountBtn" class="stepper-btn" type="button" aria-label="Decrease container count">-</button>
+                <div id="paneCountValue" class="stepper-value">2</div>
+                <button id="increaseCountBtn" class="stepper-btn" type="button" aria-label="Increase container count">+</button>
+              </div>
+            </section>
+
+            <section class="settings-card">
+              <div class="card-header">
+                <h2>Layout Mode</h2>
+                <span class="card-hint">3 supported modes</span>
+              </div>
+              <div id="layoutModeGroup" class="layout-mode-group">
+                <button class="mode-btn active" data-layout-mode="grid" type="button">Grid</button>
+                <button class="mode-btn" data-layout-mode="columns" type="button">Columns</button>
+                <button class="mode-btn" data-layout-mode="rows" type="button">Rows</button>
+              </div>
+            </section>
+
+            <section class="settings-card summary-card">
+              <div class="card-header">
+                <h2>Current Layout</h2>
+              </div>
+              <div class="summary-row">
+                <span>Containers</span>
+                <strong id="summaryPaneCount">2</strong>
+              </div>
+              <div class="summary-row">
+                <span>Mode</span>
+                <strong id="summaryLayoutMode">Grid</strong>
+              </div>
+            </section>
+          </div>
+
+          <section class="settings-card preview-card">
+            <div class="card-header">
+              <h2>Preview</h2>
+              <span id="previewCaption" class="card-hint">Grid preview</span>
+            </div>
+            <div id="layoutPreview" class="layout-preview"></div>
+          </section>
+
+          <section class="settings-card pane-list-card">
+            <div class="card-header">
+              <h2>Panes</h2>
+              <span class="card-hint">Current and planned panes</span>
+            </div>
+            <div id="paneList" class="pane-list"></div>
+          </section>
+
+          <div class="panel-footer">
+            <span id="settingsStatus" class="settings-status">Ready</span>
+            <button id="applyBtn" class="apply-btn" type="button">Apply</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="settings-modal.js"></script>
+</body>
+</html>

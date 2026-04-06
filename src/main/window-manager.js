@@ -1,7 +1,15 @@
-const { BaseWindow, WebContentsView, Menu, clipboard } = require('electron');
+const { BaseWindow, BrowserWindow, WebContentsView, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+
+const TOP_BAR_HEIGHT = 40;
+const CONTROL_BAR_HEIGHT = 100;
+const PANE_GAP = 1;
+const DEFAULT_LAYOUT_MODE = 'grid';
+const LAYOUT_MODES = ['grid', 'columns', 'rows'];
+const LAYOUT_CONFIG_PATH = path.join(__dirname, '../../config/window-layout.json');
+const LEGACY_PROVIDER_CONFIG_PATH = path.join(__dirname, '../../config/window-providers.json');
 
 function safeConsoleWrite(method, ...args) {
   const stream = method === 'error' ? process.stderr : process.stdout;
@@ -27,7 +35,6 @@ function safeError(...args) {
   safeConsoleWrite('error', ...args);
 }
 
-// Provider metadata
 const PROVIDERS = {
   chatgpt: {
     url: 'https://chat.openai.com',
@@ -61,57 +68,339 @@ const PROVIDERS = {
   },
 };
 
-// Position keys
-const POSITIONS = ['left', 'right'];
-
-// Config file path
-const CONFIG_PATH = path.join(__dirname, '../../config/window-providers.json');
-
 function normalizeProviderKey(providerKey, fallback) {
   return PROVIDERS[providerKey] ? providerKey : fallback;
 }
 
-// Load provider configuration
-function loadProviderConfig() {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      const data = fs.readFileSync(CONFIG_PATH, 'utf8');
-      const parsed = JSON.parse(data);
-      return {
-        left: normalizeProviderKey(parsed.left || parsed.bottomLeft, 'chatgpt'),
-        right: normalizeProviderKey(parsed.right || parsed.bottomRight, 'gemini'),
-      };
-    }
-  } catch (error) {
-    safeError('Failed to load provider config:', error);
+function normalizeLayoutMode(layoutMode) {
+  return LAYOUT_MODES.includes(layoutMode) ? layoutMode : DEFAULT_LAYOUT_MODE;
+}
+
+function getDefaultProviderForPane(index) {
+  if (index === 0) {
+    return 'chatgpt';
   }
-  // Return default configuration
+
+  if (index === 1) {
+    return 'gemini';
+  }
+
+  return 'chatgpt';
+}
+
+function ensureDirectory(filePath) {
+  const configDir = path.dirname(filePath);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+}
+
+function loadJsonFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    safeError(`Failed to parse JSON file: ${filePath}`, error);
+    return null;
+  }
+}
+
+function normalizePaneConfigs(rawPanes) {
+  const normalized = [];
+  const usedIds = new Set();
+
+  const sourcePanes = Array.isArray(rawPanes) ? rawPanes : [];
+  sourcePanes.forEach((rawPane, index) => {
+    let id = typeof rawPane?.id === 'string' && rawPane.id.trim()
+      ? rawPane.id.trim()
+      : `pane-${index + 1}`;
+
+    if (usedIds.has(id)) {
+      id = `pane-${normalized.length + 1}`;
+    }
+
+    const providerKey = normalizeProviderKey(rawPane?.providerKey, getDefaultProviderForPane(index));
+    usedIds.add(id);
+    normalized.push({ id, providerKey });
+  });
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return [
+    { id: 'pane-1', providerKey: 'chatgpt' },
+    { id: 'pane-2', providerKey: 'gemini' },
+  ];
+}
+
+function loadLegacyPaneConfigs() {
+  const parsed = loadJsonFile(LEGACY_PROVIDER_CONFIG_PATH);
+  if (!parsed) {
+    return null;
+  }
+
+  const leftProvider = normalizeProviderKey(parsed.left || parsed.bottomLeft, 'chatgpt');
+  const rightProvider = normalizeProviderKey(parsed.right || parsed.bottomRight, 'gemini');
+
+  return [
+    { id: 'pane-1', providerKey: leftProvider },
+    { id: 'pane-2', providerKey: rightProvider },
+  ];
+}
+
+function loadLayoutConfig() {
+  const parsed = loadJsonFile(LAYOUT_CONFIG_PATH);
+  if (parsed) {
+    return {
+      layoutMode: normalizeLayoutMode(parsed.layoutMode),
+      panes: normalizePaneConfigs(parsed.panes),
+    };
+  }
+
+  const legacyPanes = loadLegacyPaneConfigs();
+  if (legacyPanes) {
+    return {
+      layoutMode: DEFAULT_LAYOUT_MODE,
+      panes: normalizePaneConfigs(legacyPanes),
+    };
+  }
+
   return {
-    left: 'chatgpt',
-    right: 'gemini',
+    layoutMode: DEFAULT_LAYOUT_MODE,
+    panes: normalizePaneConfigs(null),
   };
 }
 
-// Save provider configuration
-function saveProviderConfig(config) {
+function saveLayoutConfig(layoutState) {
   try {
-    const configDir = path.dirname(CONFIG_PATH);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    ensureDirectory(LAYOUT_CONFIG_PATH);
+    fs.writeFileSync(
+      LAYOUT_CONFIG_PATH,
+      JSON.stringify(
+        {
+          paneCount: layoutState.panes.length,
+          layoutMode: layoutState.layoutMode,
+          panes: layoutState.panes,
+        },
+        null,
+        2
+      )
+    );
   } catch (error) {
-    safeError('Failed to save provider config:', error);
+    safeError('Failed to save layout config:', error);
   }
 }
 
-function createProviderView(providerKey, position) {
+function createNextPaneId(panes) {
+  let maxIndex = 0;
+
+  panes.forEach((pane) => {
+    const match = /^pane-(\d+)$/.exec(pane.id);
+    if (match) {
+      maxIndex = Math.max(maxIndex, Number.parseInt(match[1], 10) || 0);
+    }
+  });
+
+  return `pane-${maxIndex + 1}`;
+}
+
+function createSegments(totalLength, count, gap) {
+  if (count <= 0) {
+    return [];
+  }
+
+  const totalGap = gap * Math.max(count - 1, 0);
+  const usableLength = Math.max(totalLength - totalGap, 0);
+  const baseLength = Math.floor(usableLength / count);
+  let remainder = usableLength - baseLength * count;
+  let cursor = 0;
+
+  return Array.from({ length: count }, () => {
+    const size = baseLength + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) {
+      remainder -= 1;
+    }
+
+    const segment = {
+      start: cursor,
+      size,
+    };
+
+    cursor += size + gap;
+    return segment;
+  });
+}
+
+function computeGridDimensions(count) {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.max(1, Math.ceil(count / columns));
+
+  return { rows, columns };
+}
+
+function computeStandardPaneBounds(paneCount, layoutMode, contentBounds) {
+  if (paneCount <= 0) {
+    return [];
+  }
+
+  let rows = 1;
+  let columns = 1;
+
+  if (layoutMode === 'columns') {
+    columns = paneCount;
+  } else if (layoutMode === 'rows') {
+    rows = paneCount;
+  } else {
+    const dimensions = computeGridDimensions(paneCount);
+    rows = dimensions.rows;
+    columns = dimensions.columns;
+  }
+
+  const columnSegments = createSegments(contentBounds.width, columns, PANE_GAP);
+  const rowSegments = createSegments(contentBounds.height, rows, PANE_GAP);
+  const bounds = [];
+
+  for (let index = 0; index < paneCount; index += 1) {
+    const rowIndex = Math.floor(index / columns);
+    const columnIndex = index % columns;
+    const column = columnSegments[columnIndex];
+    const row = rowSegments[rowIndex];
+
+    if (!column || !row) {
+      bounds.push({
+        x: contentBounds.x,
+        y: contentBounds.y,
+        width: 0,
+        height: 0,
+      });
+      continue;
+    }
+
+    bounds.push({
+      x: contentBounds.x + column.start,
+      y: contentBounds.y + row.start,
+      width: column.size,
+      height: row.size,
+    });
+  }
+
+  return bounds;
+}
+
+function computeSupersizedPaneBounds(paneStates, supersizedPaneId, contentBounds) {
+  if (paneStates.length === 0) {
+    return [];
+  }
+
+  if (paneStates.length === 1) {
+    return [
+      {
+        x: contentBounds.x,
+        y: contentBounds.y,
+        width: contentBounds.width,
+        height: contentBounds.height,
+      },
+    ];
+  }
+
+  const supersizedIndex = paneStates.findIndex((pane) => pane.id === supersizedPaneId);
+  if (supersizedIndex === -1) {
+    return computeStandardPaneBounds(paneStates.length, DEFAULT_LAYOUT_MODE, contentBounds);
+  }
+
+  const mainWidth = Math.max(Math.floor(contentBounds.width * 0.8), 0);
+  const sideWidth = Math.max(contentBounds.width - mainWidth - PANE_GAP, 0);
+  const sidePaneCount = paneStates.length - 1;
+  const sideSegments = createSegments(contentBounds.height, sidePaneCount, PANE_GAP);
+  const bounds = [];
+  let sideIndex = 0;
+
+  paneStates.forEach((pane) => {
+    if (pane.id === supersizedPaneId) {
+      bounds.push({
+        x: contentBounds.x,
+        y: contentBounds.y,
+        width: mainWidth,
+        height: contentBounds.height,
+      });
+      return;
+    }
+
+    const sideSegment = sideSegments[sideIndex] || { start: 0, size: 0 };
+    sideIndex += 1;
+    bounds.push({
+      x: contentBounds.x + mainWidth + PANE_GAP,
+      y: contentBounds.y + sideSegment.start,
+      width: sideWidth,
+      height: sideSegment.size,
+    });
+  });
+
+  return bounds;
+}
+
+function computePaneBounds(paneStates, layoutMode, contentBounds, supersizedPaneId) {
+  if (supersizedPaneId) {
+    return computeSupersizedPaneBounds(paneStates, supersizedPaneId, contentBounds);
+  }
+
+  return computeStandardPaneBounds(paneStates.length, layoutMode, contentBounds);
+}
+
+function getLayoutModeLabel(layoutMode) {
+  if (layoutMode === 'columns') {
+    return 'Columns';
+  }
+
+  if (layoutMode === 'rows') {
+    return 'Rows';
+  }
+
+  return 'Grid';
+}
+
+function attachEditableContextMenu(webContents) {
+  webContents.on('context-menu', (event, params) => {
+    const template = [];
+
+    if (params.selectionText) {
+      template.push({
+        label: 'Copy',
+        click: () => {
+          clipboard.writeText(params.selectionText);
+        },
+      });
+    }
+
+    if (params.isEditable) {
+      if (template.length > 0) {
+        template.push({ type: 'separator' });
+      }
+
+      template.push({
+        label: 'Paste',
+        role: 'paste',
+      });
+    }
+
+    if (template.length > 0) {
+      const menu = Menu.buildFromTemplate(template);
+      menu.popup();
+    }
+  });
+}
+
+function createProviderView(providerKey, paneId) {
   const provider = PROVIDERS[providerKey];
   if (!provider) {
     throw new Error(`Unknown provider: ${providerKey}`);
   }
 
-  safeLog(`[WindowManager] Creating view for ${providerKey} at ${position}. Preload: ${provider.preload}`);
+  safeLog(`[WindowManager] Creating view for ${providerKey} at ${paneId}. Preload: ${provider.preload}`);
 
   const webPreferences = {
     partition: providerKey === 'grok' ? 'persist:grok' : 'persist:shared',
@@ -125,75 +414,54 @@ function createProviderView(providerKey, position) {
     safeLog(`[WindowManager] Set preload path: ${webPreferences.preload}`);
   }
 
-  const view = new WebContentsView({
-    webPreferences,
-  });
-
-  // Set user agent if specified
+  const view = new WebContentsView({ webPreferences });
   if (provider.userAgent) {
     view.webContents.setUserAgent(provider.userAgent);
   }
 
-  // Track provider and position
   view.providerKey = providerKey;
-  view.position = position;
+  view.position = paneId;
+  view.paneId = paneId;
 
-  // Enable context menu for copy/paste
-  view.webContents.on('context-menu', (event, params) => {
-    const template = [];
-
-    // Add copy option if text is selected
-    if (params.selectionText) {
-      template.push({
-        label: 'Copy',
-        click: () => {
-          clipboard.writeText(params.selectionText);
-        },
-      });
-    }
-
-    // Add paste option for input fields
-    if (params.isEditable) {
-      if (template.length > 0) template.push({ type: 'separator' });
-      template.push({
-        label: 'Paste',
-        role: 'paste',
-      });
-    }
-
-    // Show menu if we have items
-    if (template.length > 0) {
-      const menu = Menu.buildFromTemplate(template);
-      menu.popup();
-    }
-  });
-
-  // Load URL
+  attachEditableContextMenu(view.webContents);
   view.webContents.loadURL(provider.url);
 
   return view;
 }
 
+function createPaneState(paneConfig) {
+  return {
+    id: paneConfig.id,
+    providerKey: paneConfig.providerKey,
+    view: createProviderView(paneConfig.providerKey, paneConfig.id),
+  };
+}
+
 async function createWindow() {
-  // Create main window
   const mainWindow = new BaseWindow({
     width: 1600,
     height: 900,
     show: false,
-    backgroundColor: '#e0e0e0', // Light gray for separators
+    backgroundColor: '#e0e0e0',
     icon: path.join(__dirname, '../../assets/icons/icon.icns'),
   });
 
-  // Maximize the window
   mainWindow.maximize();
 
-  // Track which position is supersized (null = normal grid)
-  let supersizedPosition = null;
+  let settingsWindow = null;
+  let supersizedPaneId = null;
+  let currentZoomFactor = 1.0;
+  let layoutMode = DEFAULT_LAYOUT_MODE;
+  let paneStates = [];
+  const viewPositions = {};
 
-  // Load provider configuration
-  const providerConfig = loadProviderConfig();
+  const topBarView = new WebContentsView({
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
 
-  // Create main renderer content view (control bar)
   const mainView = new WebContentsView({
     webPreferences: {
       nodeIntegration: true,
@@ -201,235 +469,328 @@ async function createWindow() {
     },
   });
 
-  // Enable context menu for copy/paste in control bar
-  mainView.webContents.on('context-menu', (event, params) => {
-    const template = [];
+  attachEditableContextMenu(topBarView.webContents);
+  attachEditableContextMenu(mainView.webContents);
 
-    // Add copy option if text is selected
-    if (params.selectionText) {
-      template.push({
-        label: 'Copy',
-        click: () => {
-          clipboard.writeText(params.selectionText);
-        },
-      });
+  function getAvailableProviders() {
+    return Object.keys(PROVIDERS).map((key) => ({
+      key,
+      name: PROVIDERS[key].name,
+    }));
+  }
+
+  function buildViewInfo(paneState) {
+    return {
+      position: paneState.id,
+      provider: paneState.providerKey,
+      availableProviders: getAvailableProviders(),
+    };
+  }
+
+  function attachPaneState(paneState) {
+    viewPositions[paneState.id] = paneState.view;
+    mainWindow.contentView.addChildView(paneState.view);
+
+    paneState.view.webContents.on('console-message', (event, level, message) => {
+      safeLog(`[${PROVIDERS[paneState.providerKey].name}@${paneState.id}] ${message}`);
+    });
+
+    paneState.view.webContents.on('did-finish-load', () => {
+      paneState.view.webContents.setZoomFactor(currentZoomFactor);
+      paneState.view.webContents.send('view-info', buildViewInfo(paneState));
+      paneState.view.webContents.send('supersize-state-changed', supersizedPaneId);
+    });
+  }
+
+  function detachPaneState(paneState) {
+    if (!paneState) {
+      return;
     }
 
-    // Add paste option for input fields
-    if (params.isEditable) {
-      if (template.length > 0) template.push({ type: 'separator' });
-      template.push({
-        label: 'Paste',
-        role: 'paste',
-      });
+    delete viewPositions[paneState.id];
+
+    try {
+      mainWindow.contentView.removeChildView(paneState.view);
+    } catch (error) {
+      // Ignore when the child view was already removed.
     }
 
-    // Show menu if we have items
-    if (template.length > 0) {
-      const menu = Menu.buildFromTemplate(template);
-      menu.popup();
+    try {
+      paneState.view.webContents.close();
+    } catch (error) {
+      // Ignore close errors during teardown.
     }
-  });
+  }
 
-  // Create views based on configuration
-  const viewPositions = {
-    left: createProviderView(providerConfig.left, 'left'),
-    right: createProviderView(providerConfig.right, 'right'),
-  };
+  function getSerializableLayoutState() {
+    return {
+      layoutMode,
+      panes: paneStates.map((paneState) => ({
+        id: paneState.id,
+        providerKey: paneState.providerKey,
+      })),
+    };
+  }
 
-  // Add views to window
-  mainWindow.contentView.addChildView(viewPositions.left);
-  mainWindow.contentView.addChildView(viewPositions.right);
-  mainWindow.contentView.addChildView(mainView);
+  function persistLayoutState() {
+    saveLayoutConfig(getSerializableLayoutState());
+  }
 
-  // Set bounds for views (updated on resize)
+  function getPaneEntries() {
+    return paneStates.slice();
+  }
+
+  function getLayoutSettingsState() {
+    return {
+      paneCount: paneStates.length,
+      layoutMode,
+      layoutModes: LAYOUT_MODES.map((mode) => ({
+        key: mode,
+        label: getLayoutModeLabel(mode),
+      })),
+      panes: paneStates.map((paneState, index) => ({
+        id: paneState.id,
+        index,
+        providerKey: paneState.providerKey,
+        providerName: PROVIDERS[paneState.providerKey]?.name || paneState.providerKey,
+      })),
+    };
+  }
+
   function updateBounds() {
     const bounds = mainWindow.getContentBounds();
     const width = bounds.width;
     const height = bounds.height;
-    const controlBarHeight = 100; // Height reserved for control bar
-    const chatAreaHeight = height - controlBarHeight;
+    const chatAreaHeight = Math.max(height - TOP_BAR_HEIGHT - CONTROL_BAR_HEIGHT, 0);
+    const contentBounds = {
+      x: 0,
+      y: TOP_BAR_HEIGHT,
+      width,
+      height: chatAreaHeight,
+    };
 
-    if (supersizedPosition === null) {
-      // Normal 2-column mode
-      const halfWidth = Math.floor(width / 2);
-      const gap = 1; // 1px gap for separators
+    topBarView.setBounds({
+      x: 0,
+      y: 0,
+      width,
+      height: TOP_BAR_HEIGHT,
+    });
 
-      viewPositions.left.setBounds({
-        x: 0,
-        y: 0,
-        width: halfWidth - Math.floor(gap / 2),
-        height: chatAreaHeight,
-      });
+    const paneBounds = computePaneBounds(paneStates, layoutMode, contentBounds, supersizedPaneId);
+    paneStates.forEach((paneState, index) => {
+      paneState.view.setBounds(
+        paneBounds[index] || {
+          x: contentBounds.x,
+          y: contentBounds.y,
+          width: 0,
+          height: 0,
+        }
+      );
+    });
 
-      viewPositions.right.setBounds({
-        x: halfWidth + Math.ceil(gap / 2),
-        y: 0,
-        width: width - halfWidth - Math.ceil(gap / 2),
-        height: chatAreaHeight,
-      });
-    } else {
-      // Supersized mode: one view takes 80%, the other stays as a side preview
-      const mainWidth = Math.floor(width * 0.8);
-      const thumbnailWidth = width - mainWidth - 2; // 2px gap
-
-      // Position supersized view
-      const supersized = viewPositions[supersizedPosition];
-      supersized.setBounds({
-        x: 0,
-        y: 0,
-        width: mainWidth,
-        height: chatAreaHeight,
-      });
-
-      const sidePosition = POSITIONS.find(pos => pos !== supersizedPosition);
-      if (sidePosition) {
-        viewPositions[sidePosition].setBounds({
-          x: mainWidth + 2,
-          y: 0,
-          width: thumbnailWidth,
-          height: chatAreaHeight,
-        });
-      }
-    }
-
-    // Bottom control bar - full width
     mainView.setBounds({
       x: 0,
-      y: chatAreaHeight,
-      width: width,
-      height: controlBarHeight,
+      y: TOP_BAR_HEIGHT + chatAreaHeight,
+      width,
+      height: CONTROL_BAR_HEIGHT,
     });
   }
 
-  // Toggle supersize for a position
-  function toggleSupersize(position) {
-    if (supersizedPosition === position) {
-      supersizedPosition = null;
-    } else {
-      supersizedPosition = position;
+  function notifySupersizeState() {
+    paneStates.forEach((paneState) => {
+      paneState.view.webContents.send('supersize-state-changed', supersizedPaneId);
+    });
+  }
+
+  function ensurePaneCount(targetCount) {
+    while (paneStates.length < targetCount) {
+      const newPane = createPaneState({
+        id: createNextPaneId(paneStates),
+        providerKey: getDefaultProviderForPane(paneStates.length),
+      });
+
+      paneStates.push(newPane);
+      attachPaneState(newPane);
     }
-    updateBounds();
 
-    // Notify all service views of state change
-    POSITIONS.forEach(pos => {
-      viewPositions[pos].webContents.send('supersize-state-changed', supersizedPosition);
-    });
-
-    return supersizedPosition;
+    while (paneStates.length > targetCount) {
+      const removedPane = paneStates.pop();
+      if (removedPane && removedPane.id === supersizedPaneId) {
+        supersizedPaneId = null;
+      }
+      detachPaneState(removedPane);
+    }
   }
 
-  // Change provider for a position
-  function changeProvider(position, newProviderKey, zoomFactor = 1.0) {
+  function setPaneZoomFactor(zoomFactor) {
+    currentZoomFactor = zoomFactor;
+    paneStates.forEach((paneState) => {
+      paneState.view.webContents.setZoomFactor(currentZoomFactor);
+    });
+  }
+
+  function applyLayoutSettings(nextSettings = {}) {
+    const parsedPaneCount = Number.parseInt(nextSettings.paneCount, 10);
+    const targetPaneCount = Number.isFinite(parsedPaneCount)
+      ? Math.max(1, parsedPaneCount)
+      : paneStates.length;
+
+    layoutMode = normalizeLayoutMode(nextSettings.layoutMode || layoutMode);
+    ensurePaneCount(targetPaneCount);
+    persistLayoutState();
+    updateBounds();
+    notifySupersizeState();
+
+    return getLayoutSettingsState();
+  }
+
+  function toggleSupersize(paneId) {
+    const paneExists = paneStates.some((paneState) => paneState.id === paneId);
+    if (!paneExists) {
+      return supersizedPaneId;
+    }
+
+    supersizedPaneId = supersizedPaneId === paneId ? null : paneId;
+    updateBounds();
+    notifySupersizeState();
+
+    return supersizedPaneId;
+  }
+
+  function changeProvider(paneId, newProviderKey) {
     if (!PROVIDERS[newProviderKey]) {
       return false;
     }
 
-    // Get old view
-    const oldView = viewPositions[position];
+    const paneIndex = paneStates.findIndex((paneState) => paneState.id === paneId);
+    if (paneIndex === -1) {
+      return false;
+    }
 
-    // Remove from window
-    mainWindow.contentView.removeChildView(oldView);
-
-    // Close old view
-    oldView.webContents.close();
-
-    // Create new view
-    const newView = createProviderView(newProviderKey, position);
-
-    // Add to window
-    mainWindow.contentView.addChildView(newView);
-
-    // Update reference
-    viewPositions[position] = newView;
-
-    // Setup console forwarding for new view
-    newView.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      safeLog(`[${PROVIDERS[newProviderKey].name}@${position}] ${message}`);
+    const oldPaneState = paneStates[paneIndex];
+    const newPaneState = createPaneState({
+      id: oldPaneState.id,
+      providerKey: newProviderKey,
     });
 
-    // Send view info to new view after it loads
-    newView.webContents.on('did-finish-load', () => {
-      // Set zoom factor for new view
-      newView.webContents.setZoomFactor(zoomFactor);
-
-      // Send view info
-      newView.webContents.send('view-info', {
-        position,
-        provider: newProviderKey,
-        availableProviders: Object.keys(PROVIDERS).map(key => ({
-          key,
-          name: PROVIDERS[key].name,
-        })),
-      });
-    });
-
-    // Update bounds
+    paneStates[paneIndex] = newPaneState;
+    detachPaneState(oldPaneState);
+    attachPaneState(newPaneState);
+    persistLayoutState();
     updateBounds();
-
-    // Update config
-    providerConfig[position] = newProviderKey;
-    saveProviderConfig(providerConfig);
-
-    // Notify all views of supersize state
-    POSITIONS.forEach(pos => {
-      viewPositions[pos].webContents.send('supersize-state-changed', supersizedPosition);
-    });
+    notifySupersizeState();
 
     return true;
   }
 
-  // Update bounds on window resize
-  mainWindow.on('resized', updateBounds);
+  function openSettingsModal() {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.focus();
+      return settingsWindow;
+    }
 
-  // Load content
-  mainView.webContents.loadFile(path.join(__dirname, '../renderer/index.html'));
-  // URLs are already loaded in createProviderView()
-
-  // Forward console messages from all views to terminal
-  POSITIONS.forEach(pos => {
-    viewPositions[pos].webContents.on('console-message', (event, level, message, line, sourceId) => {
-      safeLog(`[${PROVIDERS[viewPositions[pos].providerKey].name}@${pos}] ${message}`);
+    settingsWindow = new BrowserWindow({
+      parent: mainWindow,
+      modal: true,
+      show: false,
+      width: 900,
+      height: 620,
+      minWidth: 760,
+      minHeight: 520,
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      frame: false,
+      backgroundColor: '#ffffff',
+      skipTaskbar: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
     });
 
-    // Send position and provider info to each view after it loads
-    viewPositions[pos].webContents.on('did-finish-load', () => {
-      viewPositions[pos].webContents.send('view-info', {
-        position: pos,
-        provider: viewPositions[pos].providerKey,
-        availableProviders: Object.keys(PROVIDERS).map(key => ({
-          key,
-          name: PROVIDERS[key].name,
-        })),
-      });
+    settingsWindow.removeMenu();
+    settingsWindow.setMenuBarVisibility(false);
+    settingsWindow.loadFile(path.join(__dirname, '../renderer/settings-modal.html'));
+    settingsWindow.once('ready-to-show', () => {
+      if (!settingsWindow || settingsWindow.isDestroyed()) {
+        return;
+      }
+
+      settingsWindow.center();
+      settingsWindow.show();
+      settingsWindow.focus();
     });
+
+    settingsWindow.on('closed', () => {
+      settingsWindow = null;
+    });
+
+    return settingsWindow;
+  }
+
+  function closeSettingsModal() {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.close();
+    }
+  }
+
+  const initialLayout = loadLayoutConfig();
+  layoutMode = initialLayout.layoutMode;
+  paneStates = initialLayout.panes.map((paneConfig) => createPaneState(paneConfig));
+
+  paneStates.forEach((paneState) => {
+    attachPaneState(paneState);
   });
 
-  mainView.webContents.on('console-message', (event, level, message, line, sourceId) => {
+  mainWindow.contentView.addChildView(topBarView);
+  mainWindow.contentView.addChildView(mainView);
+
+  mainWindow.on('resized', updateBounds);
+
+  topBarView.webContents.on('console-message', (event, level, message) => {
+    safeLog(`[TopBar] ${message}`);
+  });
+
+  mainView.webContents.on('console-message', (event, level, message) => {
     safeLog(`[ControlBar] ${message}`);
   });
 
-  // Open dev tools in development
+  topBarView.webContents.loadFile(path.join(__dirname, '../renderer/topbar.html'));
+  mainView.webContents.loadFile(path.join(__dirname, '../renderer/index.html'));
+
   if (process.argv.includes('--dev')) {
-    POSITIONS.forEach(pos => {
-      viewPositions[pos].webContents.openDevTools({ mode: 'detach' });
+    paneStates.forEach((paneState) => {
+      paneState.view.webContents.openDevTools({ mode: 'detach' });
     });
+    topBarView.webContents.openDevTools({ mode: 'detach' });
     mainView.webContents.openDevTools({ mode: 'detach' });
   }
 
-  // Initial bounds calculation
   setTimeout(updateBounds, 100);
-
   mainWindow.show();
 
-  // Store references for access in main process
+  mainWindow.topBarView = topBarView;
   mainWindow.mainView = mainView;
   mainWindow.viewPositions = viewPositions;
+  mainWindow.getPaneEntries = getPaneEntries;
+  mainWindow.getLayoutSettingsState = getLayoutSettingsState;
+  mainWindow.applyLayoutSettings = applyLayoutSettings;
   mainWindow.toggleSupersize = toggleSupersize;
   mainWindow.changeProvider = changeProvider;
-  mainWindow.getSupersizedPosition = () => supersizedPosition;
+  mainWindow.getSupersizedPosition = () => supersizedPaneId;
+  mainWindow.setPaneZoomFactor = setPaneZoomFactor;
+  mainWindow.getPaneZoomFactor = () => currentZoomFactor;
+  mainWindow.openSettingsModal = openSettingsModal;
+  mainWindow.closeSettingsModal = closeSettingsModal;
 
   return mainWindow;
 }
 
-module.exports = { createWindow, PROVIDERS, POSITIONS };
+module.exports = {
+  createWindow,
+  DEFAULT_LAYOUT_MODE,
+  LAYOUT_MODES,
+  PROVIDERS,
+};

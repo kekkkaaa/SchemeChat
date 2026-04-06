@@ -53,9 +53,19 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 0 4px;
   font-size: 12px;
   color: #666;
+}
+
+.info-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 #charCount {
@@ -76,6 +86,8 @@ kbd {
 .button-group {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .action-btn {
@@ -88,10 +100,18 @@ kbd {
   font-weight: 500;
   transition: background 0.2s;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .action-btn:active {
   opacity: 0.8;
+}
+
+.btn-icon {
+  font-size: 11px;
+  line-height: 1;
 }
 
 .new-chat-btn {
@@ -110,12 +130,43 @@ kbd {
   background: #1f6db8;
 }
 
+.sync-btn {
+  background: #16a34a;
+}
+
+.sync-btn:hover {
+  background: #15803d;
+}
+
+.sync-btn:disabled {
+  background: #94a3b8;
+  cursor: wait;
+}
+
+.send-btn {
+  background: #2563eb;
+}
+
+.send-btn:hover {
+  background: #1d4ed8;
+}
+
 .zoom-btn {
   background: #ff9800;
   padding: 4px 8px;
   min-width: 32px;
+  justify-content: center;
+  gap: 0;
 }
 
 .zoom-btn:hover {
   background: #f57c00;
+}
+
+.sync-status {
+  color: #4b5563;
+}
+
+.sync-status.error {
+  color: #dc2626;
 }

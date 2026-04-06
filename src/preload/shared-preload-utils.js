@@ -2,8 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const POLYGPT_TOP_BAR_HEIGHT = 52;
-const POLYGPT_TOP_BAR_OFFSET = 12;
+const POLYGPT_TOP_BAR_HEIGHT = 44;
 
 function loadConfig() {
   try {
@@ -81,6 +80,11 @@ function setupIPCListeners(provider, config, injectTextFn, submitFn) {
 
   ipcRenderer.on('submit-message', () => {
     submitFn();
+  });
+
+  ipcRenderer.on('inject-sync-text', (event, text) => {
+    lastSentText = text;
+    injectTextFn(text);
   });
 
   ipcRenderer.on('new-chat', () => {
@@ -281,13 +285,13 @@ function setupTopBarInsetTracking(insetPx) {
   scheduleSync();
 }
 
-function applyTopBarInset() {
-  const insetPx = POLYGPT_TOP_BAR_HEIGHT + POLYGPT_TOP_BAR_OFFSET;
-  const inset = `${insetPx}px`;
+function applyTopBarInset(insetPx = POLYGPT_TOP_BAR_HEIGHT) {
+  const normalizedInsetPx = Math.max(0, Math.ceil(insetPx));
+  const inset = `${normalizedInsetPx}px`;
   document.documentElement.style.setProperty('scroll-padding-top', inset);
   document.body.style.setProperty('padding-top', inset, 'important');
   document.body.style.setProperty('box-sizing', 'border-box', 'important');
-  setupTopBarInsetTracking(insetPx);
+  setupTopBarInsetTracking(normalizedInsetPx);
 }
 
 function createControlsContainer() {
@@ -303,8 +307,8 @@ function createControlsContainer() {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: '8px',
-    padding: '8px 12px',
+    gap: '6px',
+    padding: '4px 10px',
     zIndex: '9999999',
     pointerEvents: 'none',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
@@ -543,7 +547,6 @@ function attachButtonEventListeners(button, viewInfo) {
 
 function createUIControls(viewInfo) {
   removeExistingControls();
-  applyTopBarInset();
 
   const container = createControlsContainer();
 
@@ -560,6 +563,9 @@ function createUIControls(viewInfo) {
   container.appendChild(dropdown);
   container.appendChild(button);
   document.body.appendChild(container);
+
+  const insetPx = container.getBoundingClientRect().bottom;
+  applyTopBarInset(insetPx);
 }
 
 function setupViewInfoListener(createUIControlsFn) {
