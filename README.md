@@ -47,3 +47,14 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 ## License
 
 MIT - See [LICENSE](LICENSE) for details.
+
+
+
+
+
+cd "C:\Users\lenovo\Pictures\Saved Pictures\共享\SchemeChat"
+npm start
+
+
+1.暂时屏蔽其他ai，只留下chatgpt和gemini。
+2.阅读product下的文档，最该开始哪一步？

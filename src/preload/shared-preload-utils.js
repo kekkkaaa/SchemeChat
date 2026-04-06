@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+const POLYGPT_TOP_BAR_HEIGHT = 52;
+const POLYGPT_TOP_BAR_OFFSET = 12;
+
 function loadConfig() {
   try {
     const configPath = path.join(__dirname, '../../config/selectors.json');
@@ -110,18 +113,30 @@ function removeExistingControls() {
   }
 }
 
+function applyTopBarInset() {
+  const inset = `${POLYGPT_TOP_BAR_HEIGHT + POLYGPT_TOP_BAR_OFFSET}px`;
+  document.documentElement.style.setProperty('scroll-padding-top', inset);
+  document.body.style.setProperty('padding-top', inset, 'important');
+  document.body.style.setProperty('box-sizing', 'border-box', 'important');
+}
+
 function createControlsContainer() {
   const container = document.createElement('div');
   container.id = 'polygpt-controls-container';
   Object.assign(container.style, {
     all: 'initial',
     position: 'fixed',
-    top: '10px',
-    right: '10px',
+    top: '0',
+    left: '0',
+    right: '0',
+    height: `${POLYGPT_TOP_BAR_HEIGHT}px`,
     display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: '8px',
+    padding: '8px 12px',
     zIndex: '9999999',
-    pointerEvents: 'auto',
+    pointerEvents: 'none',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
     fontSize: '14px',
     fontWeight: 'normal',
@@ -129,6 +144,7 @@ function createControlsContainer() {
     letterSpacing: 'normal',
     boxSizing: 'border-box',
     margin: '0',
+    background: 'linear-gradient(to bottom, rgba(20, 20, 20, 0.92), rgba(20, 20, 20, 0.65), rgba(20, 20, 20, 0))',
   });
   return container;
 }
@@ -160,6 +176,7 @@ function styleDropdown(dropdown) {
     cursor: 'pointer',
     boxSizing: 'border-box',
     margin: '0',
+    pointerEvents: 'auto',
   });
 
   Object.assign(selected.style, {
@@ -313,6 +330,7 @@ function styleButton(button) {
     lineHeight: 'normal',
     letterSpacing: 'normal',
     boxSizing: 'border-box',
+    pointerEvents: 'auto',
   });
 }
 
@@ -355,6 +373,7 @@ function attachButtonEventListeners(button, viewInfo) {
 
 function createUIControls(viewInfo) {
   removeExistingControls();
+  applyTopBarInset();
 
   const container = createControlsContainer();
 

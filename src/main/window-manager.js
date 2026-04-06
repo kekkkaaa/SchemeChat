@@ -1,6 +1,31 @@
 const { BaseWindow, WebContentsView, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const util = require('util');
+
+function safeConsoleWrite(method, ...args) {
+  const stream = method === 'error' ? process.stderr : process.stdout;
+  if (!stream || stream.destroyed || stream.writable === false) {
+    return;
+  }
+
+  try {
+    stream.write(`${util.format(...args)}\n`);
+  } catch (error) {
+    if (error && error.code === 'EPIPE') {
+      return;
+    }
+    throw error;
+  }
+}
+
+function safeLog(...args) {
+  safeConsoleWrite('log', ...args);
+}
+
+function safeError(...args) {
+  safeConsoleWrite('error', ...args);
+}
 
 // Provider metadata
 const PROVIDERS = {
@@ -37,27 +62,33 @@ const PROVIDERS = {
 };
 
 // Position keys
-const POSITIONS = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'];
+const POSITIONS = ['left', 'right'];
 
 // Config file path
 const CONFIG_PATH = path.join(__dirname, '../../config/window-providers.json');
+
+function normalizeProviderKey(providerKey, fallback) {
+  return PROVIDERS[providerKey] ? providerKey : fallback;
+}
 
 // Load provider configuration
 function loadProviderConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = fs.readFileSync(CONFIG_PATH, 'utf8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      return {
+        left: normalizeProviderKey(parsed.left || parsed.bottomLeft, 'chatgpt'),
+        right: normalizeProviderKey(parsed.right || parsed.bottomRight, 'gemini'),
+      };
     }
   } catch (error) {
-    console.error('Failed to load provider config:', error);
+    safeError('Failed to load provider config:', error);
   }
   // Return default configuration
   return {
-    topLeft: "claude",
-    topRight: "grok",
-    bottomLeft: "chatgpt",
-    bottomRight: "gemini"
+    left: 'chatgpt',
+    right: 'gemini',
   };
 }
 
@@ -70,7 +101,7 @@ function saveProviderConfig(config) {
     }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   } catch (error) {
-    console.error('Failed to save provider config:', error);
+    safeError('Failed to save provider config:', error);
   }
 }
 
@@ -80,7 +111,7 @@ function createProviderView(providerKey, position) {
     throw new Error(`Unknown provider: ${providerKey}`);
   }
 
-  console.log(`[WindowManager] Creating view for ${providerKey} at ${position}. Preload: ${provider.preload}`);
+  safeLog(`[WindowManager] Creating view for ${providerKey} at ${position}. Preload: ${provider.preload}`);
 
   const webPreferences = {
     partition: providerKey === 'grok' ? 'persist:grok' : 'persist:shared',
@@ -91,7 +122,7 @@ function createProviderView(providerKey, position) {
 
   if (provider.preload) {
     webPreferences.preload = path.join(__dirname, `../preload/${provider.preload}`);
-    console.log(`[WindowManager] Set preload path: ${webPreferences.preload}`);
+    safeLog(`[WindowManager] Set preload path: ${webPreferences.preload}`);
   }
 
   const view = new WebContentsView({
@@ -202,17 +233,13 @@ async function createWindow() {
 
   // Create views based on configuration
   const viewPositions = {
-    topLeft: createProviderView(providerConfig.topLeft, 'topLeft'),
-    topRight: createProviderView(providerConfig.topRight, 'topRight'),
-    bottomLeft: createProviderView(providerConfig.bottomLeft, 'bottomLeft'),
-    bottomRight: createProviderView(providerConfig.bottomRight, 'bottomRight'),
+    left: createProviderView(providerConfig.left, 'left'),
+    right: createProviderView(providerConfig.right, 'right'),
   };
 
   // Add views to window
-  mainWindow.contentView.addChildView(viewPositions.topLeft);
-  mainWindow.contentView.addChildView(viewPositions.topRight);
-  mainWindow.contentView.addChildView(viewPositions.bottomLeft);
-  mainWindow.contentView.addChildView(viewPositions.bottomRight);
+  mainWindow.contentView.addChildView(viewPositions.left);
+  mainWindow.contentView.addChildView(viewPositions.right);
   mainWindow.contentView.addChildView(mainView);
 
   // Set bounds for views (updated on resize)
@@ -224,48 +251,27 @@ async function createWindow() {
     const chatAreaHeight = height - controlBarHeight;
 
     if (supersizedPosition === null) {
-      // Normal 2x2 grid mode
+      // Normal 2-column mode
       const halfWidth = Math.floor(width / 2);
-      const halfHeight = Math.floor(chatAreaHeight / 2);
       const gap = 1; // 1px gap for separators
 
-      // Top-left
-      viewPositions.topLeft.setBounds({
+      viewPositions.left.setBounds({
         x: 0,
         y: 0,
         width: halfWidth - Math.floor(gap / 2),
-        height: halfHeight - Math.floor(gap / 2),
+        height: chatAreaHeight,
       });
 
-      // Top-right
-      viewPositions.topRight.setBounds({
+      viewPositions.right.setBounds({
         x: halfWidth + Math.ceil(gap / 2),
         y: 0,
         width: width - halfWidth - Math.ceil(gap / 2),
-        height: halfHeight - Math.floor(gap / 2),
-      });
-
-      // Bottom-left
-      viewPositions.bottomLeft.setBounds({
-        x: 0,
-        y: halfHeight + Math.ceil(gap / 2),
-        width: halfWidth - Math.floor(gap / 2),
-        height: chatAreaHeight - halfHeight - Math.ceil(gap / 2),
-      });
-
-      // Bottom-right
-      viewPositions.bottomRight.setBounds({
-        x: halfWidth + Math.ceil(gap / 2),
-        y: halfHeight + Math.ceil(gap / 2),
-        width: width - halfWidth - Math.ceil(gap / 2),
-        height: chatAreaHeight - halfHeight - Math.ceil(gap / 2),
+        height: chatAreaHeight,
       });
     } else {
-      // Supersized mode: one view takes 80%, others are thumbnails
+      // Supersized mode: one view takes 80%, the other stays as a side preview
       const mainWidth = Math.floor(width * 0.8);
       const thumbnailWidth = width - mainWidth - 2; // 2px gap
-      const thumbnailHeight = Math.floor(chatAreaHeight / 3);
-      const gap = 1;
 
       // Position supersized view
       const supersized = viewPositions[supersizedPosition];
@@ -276,16 +282,15 @@ async function createWindow() {
         height: chatAreaHeight,
       });
 
-      // Position thumbnails vertically on the right
-      const thumbnails = POSITIONS.filter(pos => pos !== supersizedPosition);
-      thumbnails.forEach((pos, index) => {
-        viewPositions[pos].setBounds({
+      const sidePosition = POSITIONS.find(pos => pos !== supersizedPosition);
+      if (sidePosition) {
+        viewPositions[sidePosition].setBounds({
           x: mainWidth + 2,
-          y: index * (thumbnailHeight + gap),
+          y: 0,
           width: thumbnailWidth,
-          height: thumbnailHeight - (index < thumbnails.length - 1 ? gap : 0),
+          height: chatAreaHeight,
         });
-      });
+      }
     }
 
     // Bottom control bar - full width
@@ -316,6 +321,10 @@ async function createWindow() {
 
   // Change provider for a position
   function changeProvider(position, newProviderKey, zoomFactor = 1.0) {
+    if (!PROVIDERS[newProviderKey]) {
+      return false;
+    }
+
     // Get old view
     const oldView = viewPositions[position];
 
@@ -336,7 +345,7 @@ async function createWindow() {
 
     // Setup console forwarding for new view
     newView.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      console.log(`[${PROVIDERS[newProviderKey].name}@${position}] ${message}`);
+      safeLog(`[${PROVIDERS[newProviderKey].name}@${position}] ${message}`);
     });
 
     // Send view info to new view after it loads
@@ -380,7 +389,7 @@ async function createWindow() {
   // Forward console messages from all views to terminal
   POSITIONS.forEach(pos => {
     viewPositions[pos].webContents.on('console-message', (event, level, message, line, sourceId) => {
-      console.log(`[${PROVIDERS[viewPositions[pos].providerKey].name}@${pos}] ${message}`);
+      safeLog(`[${PROVIDERS[viewPositions[pos].providerKey].name}@${pos}] ${message}`);
     });
 
     // Send position and provider info to each view after it loads
@@ -397,7 +406,7 @@ async function createWindow() {
   });
 
   mainView.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    console.log(`[ControlBar] ${message}`);
+    safeLog(`[ControlBar] ${message}`);
   });
 
   // Open dev tools in development

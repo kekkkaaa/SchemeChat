@@ -5,6 +5,19 @@ const windowManager = require('./window-manager');
 let mainWindow;
 let currentZoomFactor = 1.0;
 
+[process.stdout, process.stderr].forEach((stream) => {
+  if (!stream) {
+    return;
+  }
+
+  stream.on('error', (error) => {
+    if (error && error.code === 'EPIPE') {
+      return;
+    }
+    throw error;
+  });
+});
+
 app.on('ready', async () => {
   // Handle permissions for media (microphone)
   session.fromPartition('persist:shared').setPermissionRequestHandler((webContents, permission, callback) => {
@@ -237,4 +250,3 @@ app.on('activate', async () => {
     mainWindow = await windowManager.createWindow();
   }
 });
-
