@@ -107,17 +107,187 @@ function setupInputScanner(provider, config, getInputElement, setInputElement, f
 }
 
 function removeExistingControls() {
+  cleanupTopBarInsetTracking();
   const existingContainer = document.getElementById('polygpt-controls-container');
   if (existingContainer) {
     existingContainer.remove();
   }
 }
 
+function cleanupTopBarInsetTracking() {
+  if (typeof window.__polygptTopInsetCleanup === 'function') {
+    window.__polygptTopInsetCleanup();
+    window.__polygptTopInsetCleanup = null;
+  }
+
+  resetAdjustedTopElements();
+}
+
+function resetAdjustedTopElements() {
+  const adjustedElements = document.querySelectorAll('[data-polygpt-adjusted-top="true"]');
+  adjustedElements.forEach((element) => {
+    if (element.dataset.polygptOriginalInlineTop) {
+      element.style.setProperty('top', element.dataset.polygptOriginalInlineTop, 'important');
+    } else {
+      element.style.removeProperty('top');
+    }
+
+    delete element.dataset.polygptAdjustedTop;
+    delete element.dataset.polygptOriginalInlineTop;
+  });
+}
+
+function shouldOffsetTopAnchoredElement(element, insetPx) {
+  if (!element || element.id === 'polygpt-controls-container') {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  if (!style || !['fixed', 'sticky'].includes(style.position)) {
+    return false;
+  }
+
+  if (style.display === 'none' || style.visibility === 'hidden') {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (rect.height <= 0 || rect.bottom <= 0) {
+    return false;
+  }
+
+  return rect.top < insetPx && rect.bottom > 0;
+}
+
+function collectTopAnchoredCandidates(insetPx) {
+  if (typeof document.elementsFromPoint !== 'function') {
+    return [];
+  }
+
+  const sampleXs = [...new Set([
+    16,
+    Math.floor(window.innerWidth / 2),
+    Math.max(16, window.innerWidth - 16),
+    Math.max(16, window.innerWidth - 120),
+  ])].filter((value) => value > 0 && value < window.innerWidth);
+
+  const sampleYs = [...new Set([
+    4,
+    16,
+    28,
+    40,
+    Math.max(4, insetPx - 12),
+    Math.max(4, insetPx - 4),
+  ])].filter((value) => value < window.innerHeight);
+  const candidates = new Set();
+
+  sampleXs.forEach((x) => {
+    sampleYs.forEach((y) => {
+      const stack = document.elementsFromPoint(x, y);
+      stack.forEach((element) => {
+        let current = element;
+        while (current && current !== document.body && current !== document.documentElement) {
+          if (shouldOffsetTopAnchoredElement(current, insetPx)) {
+            candidates.add(current);
+          }
+          current = current.parentElement;
+        }
+      });
+    });
+  });
+
+  return [...candidates];
+}
+
+function applyTopOffsetToElement(element, insetPx) {
+  const computedTop = window.getComputedStyle(element).top;
+  const rect = element.getBoundingClientRect();
+  const originalInlineTop = element.style.top || '';
+  const shiftPx = Math.max(insetPx - rect.top, 0);
+
+  element.dataset.polygptOriginalInlineTop = originalInlineTop;
+  element.dataset.polygptAdjustedTop = 'true';
+
+  if (computedTop && computedTop !== 'auto') {
+    element.style.setProperty('top', `calc(${computedTop} + ${shiftPx}px)`, 'important');
+    return;
+  }
+
+  const fallbackTop = Math.max(rect.top, 0) + shiftPx;
+  element.style.setProperty('top', `${fallbackTop}px`, 'important');
+}
+
+function syncTopAnchoredElements(insetPx) {
+  resetAdjustedTopElements();
+  const candidates = collectTopAnchoredCandidates(insetPx);
+  candidates.forEach((element) => applyTopOffsetToElement(element, insetPx));
+}
+
+function setupTopBarInsetTracking(insetPx) {
+  let frameId = null;
+  let ignoreObserverMutations = false;
+  let ignoreObserverTimer = null;
+
+  const scheduleSync = () => {
+    if (frameId !== null) {
+      return;
+    }
+
+    frameId = window.requestAnimationFrame(() => {
+      frameId = null;
+      ignoreObserverMutations = true;
+      if (ignoreObserverTimer !== null) {
+        window.clearTimeout(ignoreObserverTimer);
+      }
+      ignoreObserverTimer = window.setTimeout(() => {
+        ignoreObserverMutations = false;
+        ignoreObserverTimer = null;
+      }, 0);
+      syncTopAnchoredElements(insetPx);
+    });
+  };
+
+  const observer = new MutationObserver(() => {
+    if (ignoreObserverMutations) {
+      return;
+    }
+    scheduleSync();
+  });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  });
+
+  window.addEventListener('resize', scheduleSync);
+  window.addEventListener('scroll', scheduleSync, true);
+
+  window.__polygptTopInsetCleanup = () => {
+    observer.disconnect();
+    if (frameId !== null) {
+      window.cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+    if (ignoreObserverTimer !== null) {
+      window.clearTimeout(ignoreObserverTimer);
+      ignoreObserverTimer = null;
+    }
+    ignoreObserverMutations = false;
+    window.removeEventListener('resize', scheduleSync);
+    window.removeEventListener('scroll', scheduleSync, true);
+  };
+
+  scheduleSync();
+}
+
 function applyTopBarInset() {
-  const inset = `${POLYGPT_TOP_BAR_HEIGHT + POLYGPT_TOP_BAR_OFFSET}px`;
+  const insetPx = POLYGPT_TOP_BAR_HEIGHT + POLYGPT_TOP_BAR_OFFSET;
+  const inset = `${insetPx}px`;
   document.documentElement.style.setProperty('scroll-padding-top', inset);
   document.body.style.setProperty('padding-top', inset, 'important');
   document.body.style.setProperty('box-sizing', 'border-box', 'important');
+  setupTopBarInsetTracking(insetPx);
 }
 
 function createControlsContainer() {
