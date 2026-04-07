@@ -1,0 +1,137 @@
+const crypto = require('crypto');
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function fingerprintText(text) {
+  return crypto
+    .createHash('sha1')
+    .update(String(text || ''), 'utf8')
+    .digest('hex');
+}
+
+async function waitUntilNotBusy(inspectFn, options = {}) {
+  const timeoutMs = options.timeoutMs || 30000;
+  const pollIntervalMs = options.pollIntervalMs || 700;
+  const startedAt = Date.now();
+
+  let lastResult = await inspectFn();
+  if (!lastResult.ok) {
+    return lastResult;
+  }
+
+  while (lastResult.busy) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      return {
+        ...lastResult,
+        ok: false,
+        error: lastResult.error || 'Timed out while waiting for the provider to stop generating.',
+      };
+    }
+
+    await delay(pollIntervalMs);
+    lastResult = await inspectFn();
+    if (!lastResult.ok) {
+      return lastResult;
+    }
+  }
+
+  return lastResult;
+}
+
+async function captureUntilStable(inspectFn, options = {}, initialResult = null) {
+  const timeoutMs = options.timeoutMs || 12000;
+  const pollIntervalMs = options.pollIntervalMs || 700;
+  const stablePassesRequired = options.stablePassesRequired || 2;
+  const startedAt = Date.now();
+
+  let previousResult = initialResult || await inspectFn();
+  if (!previousResult.ok) {
+    return previousResult;
+  }
+
+  if (previousResult.busy) {
+    return {
+      ...previousResult,
+      ok: false,
+      error: previousResult.error || 'The provider is still generating.',
+    };
+  }
+
+  if (!previousResult.text) {
+    return {
+      ...previousResult,
+      ok: false,
+      error: previousResult.error || 'No latest reply was found.',
+    };
+  }
+
+  let previousFingerprint = previousResult.fingerprint || fingerprintText(previousResult.text);
+  let stablePasses = 0;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await delay(pollIntervalMs);
+
+    const currentResult = await inspectFn();
+    if (!currentResult.ok) {
+      return currentResult;
+    }
+
+    if (currentResult.busy) {
+      previousResult = currentResult;
+      previousFingerprint = currentResult.fingerprint || fingerprintText(currentResult.text);
+      stablePasses = 0;
+      continue;
+    }
+
+    if (!currentResult.text) {
+      return {
+        ...currentResult,
+        ok: false,
+        error: currentResult.error || 'No latest reply was found.',
+      };
+    }
+
+    const currentFingerprint = currentResult.fingerprint || fingerprintText(currentResult.text);
+    if (currentFingerprint === previousFingerprint) {
+      stablePasses += 1;
+      if (stablePasses >= stablePassesRequired) {
+        return {
+          ...currentResult,
+          fingerprint: currentFingerprint,
+        };
+      }
+    } else {
+      stablePasses = 0;
+    }
+
+    previousResult = currentResult;
+    previousFingerprint = currentFingerprint;
+  }
+
+  return {
+    ...previousResult,
+    ok: false,
+    error: previousResult.error || 'Timed out while waiting for the latest reply to stabilize.',
+  };
+}
+
+async function captureStableReply(inspectFn, options = {}) {
+  const settledResult = await waitUntilNotBusy(inspectFn, options.busyWait);
+  if (!settledResult.ok) {
+    return settledResult;
+  }
+
+  return captureUntilStable(inspectFn, options.stability, settledResult);
+}
+
+module.exports = {
+  captureStableReply,
+  captureUntilStable,
+  delay,
+  fingerprintText,
+  waitUntilNotBusy,
+};
