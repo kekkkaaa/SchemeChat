@@ -1,18 +1,14 @@
 {
-  "paneCount": 3,
+  "paneCount": 2,
   "layoutMode": "rows",
   "panes": [
     {
       "id": "pane-1",
-      "providerKey": "grok"
+      "providerKey": "chatgpt"
     },
     {
       "id": "pane-2",
       "providerKey": "gemini"
-    },
-    {
-      "id": "pane-3",
-      "providerKey": "chatgpt"
     }
   ]
 }
