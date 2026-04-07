@@ -5,7 +5,6 @@ const {
   findElement,
   findVisibleElement,
   isVisibleElement,
-  readInputTextValue,
   createSubmitHandler,
   delay,
   setupIPCListeners,
@@ -57,14 +56,184 @@ function findGeminiInput(element) {
   }
 
   if (element.tagName === 'RICH-TEXTAREA') {
-    return element.querySelector('[contenteditable="true"]') || element;
+    return element.querySelector('[contenteditable="true"]')
+      || element.querySelector('[role="textbox"]')
+      || element;
   }
 
   if (element.contentEditable === 'true') {
-    return element.querySelector('p') || element;
+    return element;
   }
 
   return element;
+}
+
+function normalizeGeminiText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u200b/g, '');
+}
+
+function readGeminiInlineText(node) {
+  if (!node) {
+    return '';
+  }
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    return normalizeGeminiText(node.textContent || '');
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return '';
+  }
+
+  if (node.tagName === 'BR') {
+    return '\n';
+  }
+
+  return Array.from(node.childNodes || [])
+    .map((child) => readGeminiInlineText(child))
+    .join('');
+}
+
+function normalizeGeminiBlockLines(lines) {
+  const normalizedLines = Array.isArray(lines)
+    ? lines.map((line) => normalizeGeminiText(line))
+    : [];
+
+  while (normalizedLines.length > 0 && normalizedLines[0] === '') {
+    normalizedLines.shift();
+  }
+
+  while (normalizedLines.length > 0 && normalizedLines[normalizedLines.length - 1] === '') {
+    normalizedLines.pop();
+  }
+
+  if (normalizedLines.length === 0) {
+    return '';
+  }
+
+  const squashedLines = [];
+  let blankRunLength = 0;
+
+  normalizedLines.forEach((line) => {
+    if (line === '') {
+      blankRunLength += 1;
+      if (blankRunLength > 1) {
+        return;
+      }
+    } else {
+      blankRunLength = 0;
+    }
+
+    squashedLines.push(line);
+  });
+
+  return squashedLines.join('\n');
+}
+
+function readGeminiEditorText(element) {
+  const resolvedElement = findGeminiInput(element);
+  if (!resolvedElement) {
+    return '';
+  }
+
+  if (resolvedElement.tagName === 'TEXTAREA' || resolvedElement.tagName === 'INPUT') {
+    return normalizeGeminiText(resolvedElement.value || '');
+  }
+
+  if (resolvedElement.contentEditable !== 'true') {
+    return normalizeGeminiText(resolvedElement.innerText || resolvedElement.textContent || '');
+  }
+
+  const blockLines = [];
+  Array.from(resolvedElement.childNodes || []).forEach((node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const rawText = normalizeGeminiText(node.textContent || '');
+      if (rawText.length === 0) {
+        return;
+      }
+
+      rawText.split('\n').forEach((line) => blockLines.push(line));
+      return;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return;
+    }
+
+    if (node.tagName === 'BR') {
+      blockLines.push('');
+      return;
+    }
+
+    const blockText = readGeminiInlineText(node).replace(/\n+$/g, '');
+    blockLines.push(blockText);
+  });
+
+  if (blockLines.length === 0 || blockLines.every((line) => line === '')) {
+    return '';
+  }
+
+  return normalizeGeminiBlockLines(blockLines);
+}
+
+function moveCursorToEnd(element) {
+  if (!element || typeof window.getSelection !== 'function') {
+    return;
+  }
+
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function writeGeminiContentEditableText(element, text) {
+  const normalizedText = normalizeGeminiText(text);
+  const fragment = document.createDocumentFragment();
+
+  if (typeof element.focus === 'function') {
+    element.focus();
+  }
+
+  const lines = normalizedText.length > 0
+    ? normalizedText.split('\n')
+    : [''];
+
+  lines.forEach((line) => {
+    const paragraph = document.createElement('p');
+    if (line.length > 0) {
+      paragraph.textContent = line;
+    } else {
+      paragraph.appendChild(document.createElement('br'));
+    }
+
+    fragment.appendChild(paragraph);
+  });
+
+  if (typeof element.replaceChildren === 'function') {
+    element.replaceChildren(fragment);
+  } else {
+    while (element.firstChild) {
+      element.removeChild(element.firstChild);
+    }
+
+    element.appendChild(fragment);
+  }
+
+  if (element.classList) {
+    element.classList.toggle('ql-blank', normalizedText.length === 0);
+  }
+
+  moveCursorToEnd(element);
+  return true;
 }
 
 function resolveInputElement() {
@@ -81,24 +250,16 @@ function writeInputText(text) {
     return false;
   }
 
-  if (inputElement.tagName === 'TEXTAREA' || inputElement.tagName === 'INPUT') {
-    inputElement.value = text;
-    inputElement.selectionStart = text.length;
-    inputElement.selectionEnd = text.length;
-  } else if (inputElement.contentEditable === 'true' || inputElement.tagName === 'P') {
-    while (inputElement.firstChild) {
-      inputElement.removeChild(inputElement.firstChild);
-    }
+  const normalizedText = normalizeGeminiText(text);
 
-    const lines = text.split('\n');
-    lines.forEach((line, index) => {
-      inputElement.appendChild(document.createTextNode(line));
-      if (index < lines.length - 1) {
-        inputElement.appendChild(document.createElement('br'));
-      }
-    });
+  if (inputElement.tagName === 'TEXTAREA' || inputElement.tagName === 'INPUT') {
+    inputElement.value = normalizedText;
+    inputElement.selectionStart = normalizedText.length;
+    inputElement.selectionEnd = normalizedText.length;
+  } else if (inputElement.contentEditable === 'true') {
+    writeGeminiContentEditableText(inputElement, normalizedText);
   } else {
-    inputElement.textContent = text;
+    inputElement.textContent = normalizedText;
   }
 
   [
@@ -135,7 +296,7 @@ function injectText(text) {
   }
 
   if (appendBaseText === null) {
-    appendBaseText = readInputTextValue(resolvedInput);
+    appendBaseText = readGeminiEditorText(resolvedInput);
   }
 
   writeInputText(`${appendBaseText}${nextText}`);
