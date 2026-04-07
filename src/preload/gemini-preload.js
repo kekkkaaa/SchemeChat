@@ -5,6 +5,7 @@ const {
   findElement,
   findVisibleElement,
   isVisibleElement,
+  readInputTextValue,
   createSubmitHandler,
   delay,
   setupIPCListeners,
@@ -35,6 +36,7 @@ const GEMINI_NAV_MENU_SELECTORS = [
 ];
 
 let inputElement = null;
+let appendBaseText = null;
 
 function isGeminiHost() {
   return window.location.hostname === 'gemini.google.com'
@@ -57,13 +59,18 @@ function findGeminiInput(element) {
   return element;
 }
 
-function injectText(text) {
+function resolveInputElement() {
   const rawElement = findElement(config.gemini?.input);
   inputElement = findGeminiInput(rawElement);
+  return inputElement;
+}
+
+function writeInputText(text) {
+  inputElement = resolveInputElement();
 
   if (!inputElement) {
     ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
-    return;
+    return false;
   }
 
   if (inputElement.tagName === 'TEXTAREA' || inputElement.tagName === 'INPUT') {
@@ -95,6 +102,40 @@ function injectText(text) {
       key: 'a',
     }),
   ].forEach((event) => inputElement.dispatchEvent(event));
+  return true;
+}
+
+function resetAppendState() {
+  appendBaseText = null;
+}
+
+function injectText(text) {
+  const nextText = String(text || '');
+  const resolvedInput = resolveInputElement();
+
+  if (!resolvedInput) {
+    ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
+    return;
+  }
+
+  if (nextText.length === 0) {
+    if (appendBaseText !== null) {
+      writeInputText(appendBaseText);
+      resetAppendState();
+    }
+    return;
+  }
+
+  if (appendBaseText === null) {
+    appendBaseText = readInputTextValue(resolvedInput);
+  }
+
+  writeInputText(`${appendBaseText}${nextText}`);
+}
+
+function injectSyncText(text) {
+  resetAppendState();
+  writeInputText(String(text || ''));
 }
 
 function clickGeminiButtonOnce(element) {
@@ -215,6 +256,9 @@ const submitMessage = createSubmitHandler(
 );
 
 setupIPCListeners(provider, config, injectText, submitMessage, {
+  onSyncText: injectSyncText,
+  onBeforeSubmit: resetAppendState,
+  onBeforeNewChat: resetAppendState,
   onPrivateNewChat: handlePrivateNewChat,
 });
 

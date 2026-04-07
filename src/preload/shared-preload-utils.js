@@ -39,6 +39,18 @@ function delay(ms) {
   });
 }
 
+function readInputTextValue(element) {
+  if (!element) {
+    return '';
+  }
+
+  if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
+    return String(element.value || '').replace(/\r\n/g, '\n');
+  }
+
+  return String(element.innerText || element.textContent || '').replace(/\r\n/g, '\n');
+}
+
 function normalizeText(text) {
   return String(text || '')
     .replace(/\s+/g, ' ')
@@ -235,15 +247,28 @@ function setupIPCListeners(provider, config, injectTextFn, submitFn, options = {
   });
 
   ipcRenderer.on('submit-message', () => {
+    lastSentText = null;
+    if (typeof options.onBeforeSubmit === 'function') {
+      options.onBeforeSubmit();
+    }
     submitFn();
   });
 
   ipcRenderer.on('inject-sync-text', (event, text) => {
     lastSentText = text;
+    if (typeof options.onSyncText === 'function') {
+      options.onSyncText(text);
+      return;
+    }
+
     injectTextFn(text);
   });
 
   ipcRenderer.on('new-chat', () => {
+    lastSentText = null;
+    if (typeof options.onBeforeNewChat === 'function') {
+      options.onBeforeNewChat();
+    }
     const newChatButton = findElement(config[provider]?.newChat);
     if (newChatButton) {
       newChatButton.click();
@@ -866,6 +891,7 @@ module.exports = {
   isVisibleElement,
   normalizeText,
   readElementActionLabel,
+  readInputTextValue,
   createSubmitHandler,
   setupIPCListeners,
   setupInputScanner,

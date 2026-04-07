@@ -4,6 +4,7 @@ const {
   clickElement,
   findElement,
   findActionElement,
+  readInputTextValue,
   createSubmitHandler,
   delay,
   setupIPCListeners,
@@ -26,17 +27,20 @@ const GROK_PRIVATE_PATTERNS = [
 ];
 
 let inputElement = null;
-let lastText = '';
+let appendBaseText = null;
 
-function injectText(text) {
+function resolveInputElement() {
   inputElement = findElement(config.grok?.input);
+  return inputElement;
+}
+
+function writeInputText(text) {
+  inputElement = resolveInputElement();
 
   if (!inputElement) {
     ipcRenderer.invoke('selector-error', 'grok', 'Input element not found');
-    return;
+    return false;
   }
-
-  lastText = text;
 
   if (inputElement.tagName === 'TEXTAREA') {
     inputElement.value = text;
@@ -69,6 +73,40 @@ function injectText(text) {
   ];
 
   events.forEach((event) => inputElement.dispatchEvent(event));
+  return true;
+}
+
+function resetAppendState() {
+  appendBaseText = null;
+}
+
+function injectText(text) {
+  const nextText = String(text || '');
+  const resolvedInput = resolveInputElement();
+
+  if (!resolvedInput) {
+    ipcRenderer.invoke('selector-error', 'grok', 'Input element not found');
+    return;
+  }
+
+  if (nextText.length === 0) {
+    if (appendBaseText !== null) {
+      writeInputText(appendBaseText);
+      resetAppendState();
+    }
+    return;
+  }
+
+  if (appendBaseText === null) {
+    appendBaseText = readInputTextValue(resolvedInput);
+  }
+
+  writeInputText(`${appendBaseText}${nextText}`);
+}
+
+function injectSyncText(text) {
+  resetAppendState();
+  writeInputText(String(text || ''));
 }
 
 function isGrokHost() {
@@ -116,6 +154,9 @@ const submitMessage = createSubmitHandler(
 );
 
 setupIPCListeners(provider, config, injectText, submitMessage, {
+  onSyncText: injectSyncText,
+  onBeforeSubmit: resetAppendState,
+  onBeforeNewChat: resetAppendState,
   onPrivateNewChat: handlePrivateNewChat,
 });
 
