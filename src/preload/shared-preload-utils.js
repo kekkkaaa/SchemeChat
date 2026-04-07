@@ -427,10 +427,19 @@ function syncTopAnchoredElements(insetPx) {
   candidates.forEach((element) => applyTopOffsetToElement(element, insetPx));
 }
 
-function setupTopBarInsetTracking(insetPx) {
+function setupTopBarInsetTracking(insetPx, options = {}) {
+  const observeDomMutations = options.observeDomMutations !== false;
+  const observeScroll = options.observeScroll !== false;
+  const observeResize = options.observeResize !== false;
+  const delayedSyncDelays = Array.isArray(options.delayedSyncDelays)
+    ? options.delayedSyncDelays.filter((delayMs) => Number.isFinite(delayMs) && delayMs >= 0)
+    : [];
+
   let frameId = null;
   let ignoreObserverMutations = false;
   let ignoreObserverTimer = null;
+  let mutationObserver = null;
+  const delayedSyncTimers = [];
 
   const scheduleSync = () => {
     if (frameId !== null) {
@@ -451,24 +460,39 @@ function setupTopBarInsetTracking(insetPx) {
     });
   };
 
-  const observer = new MutationObserver(() => {
-    if (ignoreObserverMutations) {
-      return;
-    }
-    scheduleSync();
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'style'],
-  });
+  if (observeDomMutations) {
+    mutationObserver = new MutationObserver(() => {
+      if (ignoreObserverMutations) {
+        return;
+      }
+      scheduleSync();
+    });
+    mutationObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+    });
+  }
 
-  window.addEventListener('resize', scheduleSync);
-  window.addEventListener('scroll', scheduleSync, true);
+  if (observeResize) {
+    window.addEventListener('resize', scheduleSync);
+  }
+
+  if (observeScroll) {
+    window.addEventListener('scroll', scheduleSync, true);
+  }
+
+  delayedSyncDelays.forEach((delayMs) => {
+    const timerId = window.setTimeout(scheduleSync, delayMs);
+    delayedSyncTimers.push(timerId);
+  });
 
   window.__polygptTopInsetCleanup = () => {
-    observer.disconnect();
+    if (mutationObserver) {
+      mutationObserver.disconnect();
+      mutationObserver = null;
+    }
     if (frameId !== null) {
       window.cancelAnimationFrame(frameId);
       frameId = null;
@@ -477,21 +501,26 @@ function setupTopBarInsetTracking(insetPx) {
       window.clearTimeout(ignoreObserverTimer);
       ignoreObserverTimer = null;
     }
+    delayedSyncTimers.forEach((timerId) => window.clearTimeout(timerId));
     ignoreObserverMutations = false;
-    window.removeEventListener('resize', scheduleSync);
-    window.removeEventListener('scroll', scheduleSync, true);
+    if (observeResize) {
+      window.removeEventListener('resize', scheduleSync);
+    }
+    if (observeScroll) {
+      window.removeEventListener('scroll', scheduleSync, true);
+    }
   };
 
   scheduleSync();
 }
 
-function applyTopBarInset(insetPx = POLYGPT_TOP_BAR_HEIGHT) {
+function applyTopBarInset(insetPx = POLYGPT_TOP_BAR_HEIGHT, options = {}) {
   const normalizedInsetPx = Math.max(0, Math.ceil(insetPx));
   const inset = `${normalizedInsetPx}px`;
   document.documentElement.style.setProperty('scroll-padding-top', inset);
   document.body.style.setProperty('padding-top', inset, 'important');
   document.body.style.setProperty('box-sizing', 'border-box', 'important');
-  setupTopBarInsetTracking(normalizedInsetPx);
+  setupTopBarInsetTracking(normalizedInsetPx, options);
 }
 
 function createControlsContainer() {
@@ -745,7 +774,7 @@ function attachButtonEventListeners(button, viewInfo) {
   });
 }
 
-function createUIControls(viewInfo) {
+function createUIControls(viewInfo, options = {}) {
   removeExistingControls();
 
   const container = createControlsContainer();
@@ -765,7 +794,7 @@ function createUIControls(viewInfo) {
   document.body.appendChild(container);
 
   const insetPx = container.getBoundingClientRect().bottom;
-  applyTopBarInset(insetPx);
+  applyTopBarInset(insetPx, options.topBarInset || {});
 }
 
 function setupViewInfoListener(createUIControlsFn) {

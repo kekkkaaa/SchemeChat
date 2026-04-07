@@ -35,6 +35,14 @@ const GEMINI_NAV_MENU_SELECTORS = [
   'button[title*="Menu"]',
 ];
 
+const GEMINI_UI_OPTIONS = {
+  topBarInset: {
+    observeDomMutations: false,
+    observeScroll: false,
+    delayedSyncDelays: [250, 1000, 2500],
+  },
+};
+
 let inputElement = null;
 let appendBaseText = null;
 
@@ -272,7 +280,7 @@ setupInputScanner(
 
 const getViewInfo = setupViewInfoListener((viewInfo) => {
   window.polygptGetViewInfo = () => viewInfo;
-  createUIControls(viewInfo);
+  createUIControls(viewInfo, GEMINI_UI_OPTIONS);
 });
 
 setupSupersizeListener();
@@ -281,6 +289,6 @@ setupLoadingOverlay();
 waitForDOM(() => {
   const viewInfo = getViewInfo();
   if (viewInfo) {
-    createUIControls(viewInfo);
+    createUIControls(viewInfo, GEMINI_UI_OPTIONS);
   }
 });
