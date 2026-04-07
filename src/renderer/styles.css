@@ -122,6 +122,14 @@ kbd {
   background: #7b1fa2;
 }
 
+.private-chat-btn {
+  background: #111827;
+}
+
+.private-chat-btn:hover {
+  background: #1f2937;
+}
+
 .refresh-btn {
   background: #4285f4;
 }

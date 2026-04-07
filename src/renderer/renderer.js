@@ -5,6 +5,7 @@ const textInput = document.getElementById('textInput');
 const charCount = document.getElementById('charCount');
 const refreshBtn = document.getElementById('refreshBtn');
 const newChatBtn = document.getElementById('newChatBtn');
+const privateNewChatBtn = document.getElementById('privateNewChatBtn');
 const sendBtn = document.getElementById('sendBtn');
 const syncBtn = document.getElementById('syncBtn');
 const syncStatus = document.getElementById('syncStatus');
@@ -13,6 +14,7 @@ const zoomOutBtn = document.getElementById('zoomOutBtn');
 
 let currentText = '';
 let syncInFlight = false;
+let privateNewChatInFlight = false;
 
 function setSyncStatus(message, isError = false) {
   syncStatus.textContent = message;
@@ -82,6 +84,27 @@ async function syncLatestRound() {
   }
 }
 
+async function triggerPrivateNewChat() {
+  if (privateNewChatInFlight) {
+    return;
+  }
+
+  privateNewChatInFlight = true;
+  privateNewChatBtn.disabled = true;
+  setSyncStatus('Opening private/temporary chats...', false);
+
+  try {
+    const result = await ipcRenderer.invoke('private-new-chat');
+    setSyncStatus(result?.message || 'Private New Chat finished.', !result?.ok);
+  } catch (error) {
+    setSyncStatus('Private New Chat failed.', true);
+    console.error('Failed to start private new chat:', error);
+  } finally {
+    privateNewChatInFlight = false;
+    privateNewChatBtn.disabled = false;
+  }
+}
+
 refreshBtn.addEventListener('click', () => {
   ipcRenderer.invoke('refresh-pages').catch((error) => {
     console.error('Failed to refresh:', error);
@@ -97,6 +120,10 @@ newChatBtn.addEventListener('click', () => {
   currentText = '';
   updateCharCount();
   setSyncStatus('Ready to sync latest replies', false);
+});
+
+privateNewChatBtn.addEventListener('click', () => {
+  triggerPrivateNewChat();
 });
 
 syncBtn.addEventListener('click', () => {

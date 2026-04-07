@@ -1,8 +1,11 @@
 const { ipcRenderer } = require('electron');
 const {
   loadConfig,
+  clickElement,
   findElement,
+  findActionElement,
   createSubmitHandler,
+  delay,
   setupIPCListeners,
   setupInputScanner,
   createUIControls,
@@ -14,6 +17,13 @@ const {
 
 const config = loadConfig();
 const provider = 'grok';
+const GROK_PRIVATE_PATTERNS = [
+  'private chat',
+  'private mode',
+  'private',
+  '私密聊天',
+  '私人聊天',
+];
 
 let inputElement = null;
 let lastText = '';
@@ -33,12 +43,10 @@ function injectText(text) {
     inputElement.selectionStart = text.length;
     inputElement.selectionEnd = text.length;
   } else if (inputElement.contentEditable === 'true') {
-    // Clear existing content
     while (inputElement.firstChild) {
       inputElement.removeChild(inputElement.firstChild);
     }
 
-    // Insert new content
     const lines = text.split('\n');
     lines.forEach((line, index) => {
       inputElement.appendChild(document.createTextNode(line));
@@ -63,6 +71,43 @@ function injectText(text) {
   events.forEach((event) => inputElement.dispatchEvent(event));
 }
 
+function isGrokHost() {
+  return window.location.hostname === 'x.com'
+    || window.location.hostname.endsWith('.x.com');
+}
+
+async function runGrokPrivateFlow() {
+  if (!isGrokHost()) {
+    return {
+      ok: false,
+      error: `Host mismatch: ${window.location.hostname}`,
+    };
+  }
+
+  const privateButton = findActionElement(config.grok?.privateNewChat, GROK_PRIVATE_PATTERNS);
+  if (!privateButton) {
+    return {
+      ok: false,
+      error: 'Grok private chat entry was not found.',
+    };
+  }
+
+  clickElement(privateButton);
+  await delay(500);
+
+  return { ok: true };
+}
+
+async function handlePrivateNewChat(payload) {
+  const result = await runGrokPrivateFlow();
+  await ipcRenderer.invoke('private-new-chat-result', {
+    requestId: payload?.requestId || null,
+    paneId: payload?.paneId || null,
+    provider,
+    ...result,
+  });
+}
+
 const submitMessage = createSubmitHandler(
   provider,
   config,
@@ -70,7 +115,9 @@ const submitMessage = createSubmitHandler(
   null
 );
 
-setupIPCListeners(provider, config, injectText, submitMessage);
+setupIPCListeners(provider, config, injectText, submitMessage, {
+  onPrivateNewChat: handlePrivateNewChat,
+});
 
 setupInputScanner(
   provider,

@@ -33,6 +33,162 @@ function findElement(selectors) {
   return null;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function normalizeText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isVisibleElement(element) {
+  if (!element || !(element instanceof Element)) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  if (!style || style.display === 'none' || style.visibility === 'hidden') {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function collectElementsBySelectors(selectors, scope = document) {
+  const normalizedSelectors = Array.isArray(selectors) ? selectors : [selectors];
+  const results = [];
+  const seen = new Set();
+
+  normalizedSelectors.forEach((selector) => {
+    if (!selector) {
+      return;
+    }
+
+    try {
+      scope.querySelectorAll(selector).forEach((element) => {
+        if (!seen.has(element)) {
+          seen.add(element);
+          results.push(element);
+        }
+      });
+    } catch (error) {
+      // Ignore invalid selectors and continue with fallbacks.
+    }
+  });
+
+  return results;
+}
+
+function findVisibleElement(selectors, scope = document) {
+  return collectElementsBySelectors(selectors, scope).find((element) => isVisibleElement(element)) || null;
+}
+
+function findVisibleElements(selectors, scope = document) {
+  return collectElementsBySelectors(selectors, scope).filter((element) => isVisibleElement(element));
+}
+
+function readElementActionLabel(element) {
+  return normalizeText(
+    [
+      element?.getAttribute?.('aria-label') || '',
+      element?.getAttribute?.('title') || '',
+      element?.innerText || '',
+      element?.textContent || '',
+    ].join(' ')
+  );
+}
+
+function findElementByTextPatterns(
+  textPatterns,
+  candidateSelectors = ['button', 'a', '[role="button"]', '[role="menuitem"]', '[aria-label]', '[title]'],
+  scope = document
+) {
+  const normalizedPatterns = Array.isArray(textPatterns)
+    ? textPatterns.map((pattern) => normalizeText(pattern)).filter(Boolean)
+    : [];
+
+  if (normalizedPatterns.length === 0) {
+    return null;
+  }
+
+  const candidates = collectElementsBySelectors(candidateSelectors, scope);
+  for (const candidate of candidates) {
+    if (!isVisibleElement(candidate) || candidate.disabled) {
+      continue;
+    }
+
+    const label = readElementActionLabel(candidate);
+    if (normalizedPatterns.some((pattern) => label.includes(pattern))) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function findActionElement(selectors, textPatterns = [], scope = document) {
+  return findVisibleElement(selectors, scope)
+    || findElementByTextPatterns(
+      textPatterns,
+      ['button', 'a', '[role="button"]', '[role="menuitem"]', '[aria-label]', '[title]'],
+      scope
+    );
+}
+
+function clickElement(element) {
+  if (!element || typeof element.click !== 'function') {
+    return false;
+  }
+
+  try {
+    if (typeof element.focus === 'function') {
+      element.focus();
+    }
+
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((eventName) => {
+      const event = new MouseEvent(eventName, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+      });
+      element.dispatchEvent(event);
+    });
+
+    element.click();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function waitForCondition(conditionFn, options = {}) {
+  const timeoutMs = options.timeoutMs || 4000;
+  const intervalMs = options.intervalMs || 150;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const result = await conditionFn();
+      if (result) {
+        return result;
+      }
+    } catch (error) {
+      // Ignore transient DOM errors while polling.
+    }
+
+    await delay(intervalMs);
+  }
+
+  return null;
+}
+
 function createSubmitHandler(provider, config, getInputElement, getSubmitElement) {
   return function submitMessage() {
     const submitElement = findElement(config[provider]?.submit);
@@ -69,7 +225,7 @@ function createSubmitHandler(provider, config, getInputElement, getSubmitElement
   };
 }
 
-function setupIPCListeners(provider, config, injectTextFn, submitFn) {
+function setupIPCListeners(provider, config, injectTextFn, submitFn, options = {}) {
   let lastSentText = null;
   ipcRenderer.on('text-update', (event, text) => {
     if (text !== lastSentText) {
@@ -95,6 +251,25 @@ function setupIPCListeners(provider, config, injectTextFn, submitFn) {
       console.warn(`[${provider.charAt(0).toUpperCase() + provider.slice(1)}] New chat button not found`);
     }
   });
+
+  if (typeof options.onPrivateNewChat === 'function') {
+    ipcRenderer.on('private-new-chat', async (event, payload) => {
+      try {
+        await options.onPrivateNewChat(payload);
+      } catch (error) {
+        const requestId = payload?.requestId || null;
+        const paneId = payload?.paneId || null;
+        const message = error?.message || 'Private/temporary chat flow failed unexpectedly.';
+        ipcRenderer.invoke('private-new-chat-result', {
+          requestId,
+          paneId,
+          provider,
+          ok: false,
+          error: message,
+        });
+      }
+    });
+  }
 }
 
 function setupInputScanner(provider, config, getInputElement, setInputElement, findInputFn) {
@@ -679,8 +854,18 @@ function waitForDOM(callback) {
 }
 
 module.exports = {
+  clickElement,
+  collectElementsBySelectors,
   loadConfig,
+  delay,
+  findActionElement,
   findElement,
+  findElementByTextPatterns,
+  findVisibleElement,
+  findVisibleElements,
+  isVisibleElement,
+  normalizeText,
+  readElementActionLabel,
   createSubmitHandler,
   setupIPCListeners,
   setupInputScanner,
@@ -689,5 +874,6 @@ module.exports = {
   setupSupersizeListener,
   createLoadingOverlay,
   setupLoadingOverlay,
+  waitForCondition,
   waitForDOM,
 };

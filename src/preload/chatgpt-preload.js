@@ -1,19 +1,42 @@
 const { ipcRenderer } = require('electron');
 const {
   loadConfig,
+  clickElement,
   findElement,
+  findActionElement,
+  findElementByTextPatterns,
+  findVisibleElement,
+  findVisibleElements,
+  readElementActionLabel,
   createSubmitHandler,
+  delay,
   setupIPCListeners,
   setupInputScanner,
   createUIControls,
   setupViewInfoListener,
   setupSupersizeListener,
   setupLoadingOverlay,
+  waitForCondition,
   waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
 const provider = 'chatgpt';
+const CHATGPT_TEMP_PATTERNS = [
+  'temporary chat',
+  'temporary',
+  '临时聊天',
+  '臨時聊天',
+  '临时对话',
+  '臨時對話',
+];
+const CHATGPT_MODEL_MENU_PATTERNS = [
+  'gpt',
+  'chatgpt',
+  'model',
+  '模型',
+  '模式',
+];
 
 let inputElement = null;
 let lastText = '';
@@ -61,6 +84,113 @@ function injectText(text) {
   events.forEach((event) => inputElement.dispatchEvent(event));
 }
 
+function isChatgptHost() {
+  return window.location.hostname === 'chat.openai.com'
+    || window.location.hostname === 'chatgpt.com'
+    || window.location.hostname.endsWith('.chatgpt.com');
+}
+
+function getTopBarScope() {
+  return document.querySelector('header') || document.body;
+}
+
+function findChatgptTemporaryButton(scope = document) {
+  return findActionElement(config.chatgpt?.privateNewChat, CHATGPT_TEMP_PATTERNS, scope);
+}
+
+function findChatgptModelMenuTrigger() {
+  const candidateSelectors = config.chatgpt?.temporaryMenuTrigger || [];
+  const candidates = findVisibleElements(candidateSelectors, document);
+  if (candidates.length === 0) {
+    return findElementByTextPatterns(
+      CHATGPT_MODEL_MENU_PATTERNS,
+      ['header button', 'header [role="button"]', 'button[aria-haspopup="menu"]', '[role="button"][aria-haspopup="menu"]'],
+      document
+    );
+  }
+
+  const scoredCandidates = candidates
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const label = readElementActionLabel(element);
+      let score = rect.top < 220 ? 2 : 0;
+      if (CHATGPT_MODEL_MENU_PATTERNS.some((pattern) => label.includes(pattern))) {
+        score += 3;
+      }
+      if (element.getAttribute('aria-haspopup') === 'menu') {
+        score += 2;
+      }
+      if (label.includes('temporary')) {
+        score -= 5;
+      }
+
+      return { element, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  return scoredCandidates[0]?.element || null;
+}
+
+async function runChatgptTemporaryFlow() {
+  if (!isChatgptHost()) {
+    return {
+      ok: false,
+      error: `Host mismatch: ${window.location.hostname}`,
+    };
+  }
+
+  const newChatButton = findVisibleElement(config.chatgpt?.newChat);
+  if (newChatButton) {
+    clickElement(newChatButton);
+    await delay(700);
+  }
+
+  const directTemporaryButton = findChatgptTemporaryButton(getTopBarScope()) || findChatgptTemporaryButton(document);
+  if (directTemporaryButton) {
+    clickElement(directTemporaryButton);
+    await delay(600);
+    return { ok: true };
+  }
+
+  const menuTrigger = findChatgptModelMenuTrigger();
+  if (!menuTrigger) {
+    return {
+      ok: false,
+      error: 'ChatGPT temporary chat entry was not found.',
+    };
+  }
+
+  clickElement(menuTrigger);
+  await delay(450);
+
+  const temporaryMenuItem = await waitForCondition(
+    () => findChatgptTemporaryButton(document),
+    { timeoutMs: 2500, intervalMs: 120 }
+  );
+
+  if (!temporaryMenuItem) {
+    return {
+      ok: false,
+      error: 'ChatGPT temporary chat menu item was not found.',
+    };
+  }
+
+  clickElement(temporaryMenuItem);
+  await delay(600);
+
+  return { ok: true };
+}
+
+async function handlePrivateNewChat(payload) {
+  const result = await runChatgptTemporaryFlow();
+  await ipcRenderer.invoke('private-new-chat-result', {
+    requestId: payload?.requestId || null,
+    paneId: payload?.paneId || null,
+    provider,
+    ...result,
+  });
+}
+
 const submitMessage = createSubmitHandler(
   provider,
   config,
@@ -68,7 +198,9 @@ const submitMessage = createSubmitHandler(
   null
 );
 
-setupIPCListeners(provider, config, injectText, submitMessage);
+setupIPCListeners(provider, config, injectText, submitMessage, {
+  onPrivateNewChat: handlePrivateNewChat,
+});
 
 setupInputScanner(
   provider,

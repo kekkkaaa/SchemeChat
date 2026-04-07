@@ -1,35 +1,57 @@
 const { ipcRenderer } = require('electron');
 const {
   loadConfig,
+  collectElementsBySelectors,
   findElement,
+  findVisibleElement,
+  isVisibleElement,
   createSubmitHandler,
+  delay,
   setupIPCListeners,
   setupInputScanner,
   createUIControls,
   setupViewInfoListener,
   setupSupersizeListener,
   setupLoadingOverlay,
+  waitForCondition,
   waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
 const provider = 'gemini';
 
+const GEMINI_NAV_MENU_SELECTORS = [
+  'button[data-test-id="e-nav-menu-button"]',
+  '[data-test-id="e-nav-menu-button"]',
+  'button[data-test-id="side-nav-menu-button"]',
+  '[data-test-id="side-nav-menu-button"]',
+  'button[data-testid="e-nav-menu-button"]',
+  '[data-testid="e-nav-menu-button"]',
+  'button[data-testid="side-nav-menu-button"]',
+  '[data-testid="side-nav-menu-button"]',
+  'button[aria-label*="Menu"]',
+  'button[aria-label*="menu"]',
+  'button[title*="Menu"]',
+];
+
 let inputElement = null;
-let lastText = '';
+
+function isGeminiHost() {
+  return window.location.hostname === 'gemini.google.com'
+    || window.location.hostname.endsWith('.gemini.google.com');
+}
 
 function findGeminiInput(element) {
-  if (!element) return null;
+  if (!element) {
+    return null;
+  }
 
   if (element.tagName === 'RICH-TEXTAREA') {
-    const contenteditable = element.querySelector('[contenteditable="true"]');
-    if (contenteditable) return contenteditable;
+    return element.querySelector('[contenteditable="true"]') || element;
   }
 
   if (element.contentEditable === 'true') {
-    const paragraph = element.querySelector('p');
-    if (paragraph) return paragraph;
-    return element;
+    return element.querySelector('p') || element;
   }
 
   return element;
@@ -44,9 +66,7 @@ function injectText(text) {
     return;
   }
 
-  lastText = text;
-
-  if (inputElement.tagName === 'TEXTAREA') {
+  if (inputElement.tagName === 'TEXTAREA' || inputElement.tagName === 'INPUT') {
     inputElement.value = text;
     inputElement.selectionStart = text.length;
     inputElement.selectionEnd = text.length;
@@ -62,13 +82,11 @@ function injectText(text) {
         inputElement.appendChild(document.createElement('br'));
       }
     });
-  } else if (inputElement.tagName === 'INPUT') {
-    inputElement.value = text;
   } else {
     inputElement.textContent = text;
   }
 
-  const events = [
+  [
     new Event('input', { bubbles: true }),
     new Event('change', { bubbles: true }),
     new KeyboardEvent('keyup', {
@@ -76,9 +94,117 @@ function injectText(text) {
       cancelable: true,
       key: 'a',
     }),
-  ];
+  ].forEach((event) => inputElement.dispatchEvent(event));
+}
 
-  events.forEach((event) => inputElement.dispatchEvent(event));
+function clickGeminiButtonOnce(element) {
+  if (!element || typeof element.click !== 'function') {
+    return false;
+  }
+
+  try {
+    if (typeof element.focus === 'function') {
+      element.focus();
+    }
+
+    element.click();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function findGeminiTempButton(scope = document) {
+  return collectElementsBySelectors(config.gemini?.privateNewChat || [], scope)
+    .find((element) => isVisibleElement(element) && !element.disabled) || null;
+}
+
+function findGeminiTemporaryIndicator(scope = document) {
+  return collectElementsBySelectors(config.gemini?.temporaryIndicator || [], scope)
+    .find((element) => isVisibleElement(element)) || null;
+}
+
+function isGeminiTemporaryModeActive() {
+  const mainScope = document.querySelector('#app-root main') || document.querySelector('main') || document.body;
+  if (!mainScope) {
+    return false;
+  }
+
+  return Boolean(findGeminiTemporaryIndicator(mainScope));
+}
+
+async function runGeminiTemporaryFlow() {
+  if (!isGeminiHost()) {
+    return {
+      ok: false,
+      error: `Host mismatch: ${window.location.hostname}`,
+    };
+  }
+
+  if (isGeminiTemporaryModeActive()) {
+    return { ok: true };
+  }
+
+  let tempButton = await waitForCondition(
+    () => findGeminiTempButton(document),
+    { timeoutMs: 9000, intervalMs: 180 }
+  );
+
+  if (!tempButton) {
+    const navMenuButton = findVisibleElement(GEMINI_NAV_MENU_SELECTORS, document);
+    if (navMenuButton) {
+      clickGeminiButtonOnce(navMenuButton);
+      await delay(350);
+      tempButton = await waitForCondition(
+        () => findGeminiTempButton(document),
+        { timeoutMs: 2500, intervalMs: 150 }
+      );
+    }
+  }
+
+  if (!tempButton) {
+    return {
+      ok: false,
+      error: 'Gemini temporary chat button was not found in the official left navigation.',
+    };
+  }
+
+  try {
+    tempButton.scrollIntoView({ block: 'center', inline: 'center' });
+  } catch (error) {
+    // Ignore scroll failures and continue with the click attempt.
+  }
+
+  if (!clickGeminiButtonOnce(tempButton)) {
+    return {
+      ok: false,
+      error: 'Gemini temporary chat button click failed.',
+    };
+  }
+
+  const activated = await waitForCondition(
+    () => isGeminiTemporaryModeActive(),
+    { timeoutMs: 5000, intervalMs: 120 }
+  );
+
+  if (!activated) {
+    return {
+      ok: false,
+      error: 'Gemini temporary chat did not activate.',
+    };
+  }
+
+  return { ok: true };
+}
+
+async function handlePrivateNewChat(payload) {
+  const result = await runGeminiTemporaryFlow();
+  await ipcRenderer.invoke('private-new-chat-result', {
+    requestId: payload?.requestId || null,
+    paneId: payload?.paneId || null,
+    provider,
+    ...result,
+  });
 }
 
 const submitMessage = createSubmitHandler(
@@ -88,13 +214,15 @@ const submitMessage = createSubmitHandler(
   null
 );
 
-setupIPCListeners(provider, config, injectText, submitMessage);
+setupIPCListeners(provider, config, injectText, submitMessage, {
+  onPrivateNewChat: handlePrivateNewChat,
+});
 
 setupInputScanner(
   provider,
   config,
   () => inputElement,
-  (el) => { inputElement = el; },
+  (element) => { inputElement = element; },
   (selector) => findGeminiInput(findElement(selector))
 );
 
@@ -104,10 +232,11 @@ const getViewInfo = setupViewInfoListener((viewInfo) => {
 });
 
 setupSupersizeListener();
-
 setupLoadingOverlay();
 
 waitForDOM(() => {
   const viewInfo = getViewInfo();
-  if (viewInfo) createUIControls(viewInfo);
+  if (viewInfo) {
+    createUIControls(viewInfo);
+  }
 });

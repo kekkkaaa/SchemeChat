@@ -16,6 +16,29 @@
       "button[aria-label*='New chat']",
       "a[aria-label*='New chat']",
       "[data-testid='new-chat-button']"
+    ],
+    "privateNewChat": [
+      "button[aria-label*='Temporary Chat']",
+      "button[aria-label*='Temporary']",
+      "a[aria-label*='Temporary Chat']",
+      "a[aria-label*='Temporary']",
+      "button[title*='Temporary Chat']",
+      "button[title*='Temporary']",
+      "[data-testid*='temporary-chat']",
+      "[data-testid*='temporary']"
+    ],
+    "temporaryMenuTrigger": [
+      "button[data-testid*='model']",
+      "button[aria-haspopup='menu'][data-testid*='trigger']",
+      "header button[aria-haspopup='menu']",
+      "main button[aria-haspopup='menu']"
+    ],
+    "temporaryIndicator": [
+      "button[aria-label*='Temporary']",
+      "button[title*='Temporary']",
+      "[data-testid*='temporary']",
+      "[aria-label*='temporary']",
+      "[title*='temporary']"
     ]
   },
   "gemini": {
@@ -35,6 +58,19 @@
       "a[aria-label*='New chat']",
       "button[title*='New chat']",
       "[data-testid='new-chat-button']"
+    ],
+    "privateNewChat": [
+      "button[data-test-id='temp-chat-button']",
+      "[data-test-id='temp-chat-button']",
+      "button[data-testid='temp-chat-button']",
+      "[data-testid='temp-chat-button']",
+      "temp-chat-button > button"
+    ],
+    "temporaryIndicator": [
+      ".temporary-chat-card",
+      ".temporary-chat-card-container",
+      "[class*='temporary-chat-card']",
+      "[class*='temporary-chat-card-container']"
     ]
   },
   "perplexity": {
@@ -88,6 +124,16 @@
     "newChat": [
       "a[href='/i/grok']",
       "button[aria-label*='New chat']"
+    ],
+    "privateNewChat": [
+      "button[aria-label*='Private Chat']",
+      "button[aria-label*='Private']",
+      "a[aria-label*='Private Chat']",
+      "a[aria-label*='Private']",
+      "button[title*='Private Chat']",
+      "button[title*='Private']",
+      "[data-testid*='private-chat']",
+      "[data-testid*='private']"
     ]
   }
 }

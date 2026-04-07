@@ -12,7 +12,7 @@
       <textarea
         id="textInput"
         class="text-input"
-        placeholder="Type here to mirror to ChatGPT and Gemini..."
+        placeholder="Type here to mirror to all panes..."
         spellcheck="true"
       ></textarea>
       <div class="input-info">
@@ -22,23 +22,27 @@
           <span id="syncStatus" class="sync-status">Ready to sync latest replies</span>
         </div>
         <div class="button-group">
-          <button id="newChatBtn" class="action-btn new-chat-btn" title="Start new chat in both">
-            <span class="btn-icon" aria-hidden="true">✦</span>
+          <button id="newChatBtn" class="action-btn new-chat-btn" title="Start new chat in all panes">
+            <span class="btn-icon" aria-hidden="true">+</span>
             <span>New Chat</span>
           </button>
-          <button id="syncBtn" class="action-btn sync-btn" title="Capture both latest replies and cross-sync them">
-            <span class="btn-icon" aria-hidden="true">⇄</span>
+          <button id="privateNewChatBtn" class="action-btn private-chat-btn" title="Open private or temporary chats in Grok, Gemini, and ChatGPT">
+            <span class="btn-icon" aria-hidden="true">P</span>
+            <span>Private New Chat</span>
+          </button>
+          <button id="syncBtn" class="action-btn sync-btn" title="Capture the latest stable replies and cross-sync them across all panes">
+            <span class="btn-icon" aria-hidden="true">S</span>
             <span>Sync</span>
           </button>
-          <button id="sendBtn" class="action-btn send-btn" title="Send current input to both panes">
-            <span class="btn-icon" aria-hidden="true">➤</span>
+          <button id="sendBtn" class="action-btn send-btn" title="Send current input to all panes">
+            <span class="btn-icon" aria-hidden="true">></span>
             <span>Send</span>
           </button>
-          <button id="refreshBtn" class="action-btn refresh-btn" title="Refresh both pages">
-            <span class="btn-icon" aria-hidden="true">↻</span>
+          <button id="refreshBtn" class="action-btn refresh-btn" title="Refresh all pages">
+            <span class="btn-icon" aria-hidden="true">R</span>
             <span>Refresh</span>
           </button>
-          <button id="zoomOutBtn" class="action-btn zoom-btn zoom-out-btn" title="Zoom out">−</button>
+          <button id="zoomOutBtn" class="action-btn zoom-btn zoom-out-btn" title="Zoom out">-</button>
           <button id="zoomInBtn" class="action-btn zoom-btn zoom-in-btn" title="Zoom in">+</button>
         </div>
       </div>

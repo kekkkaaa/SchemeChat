@@ -5,6 +5,7 @@ const windowManager = require('./window-manager');
 
 let mainWindow;
 let currentZoomFactor = 1.0;
+const pendingPrivateNewChatRequests = new Map();
 
 [process.stdout, process.stderr].forEach((stream) => {
   if (!stream) {
@@ -39,12 +40,64 @@ function hideNativeAppMenu(targetWindow) {
   }
 }
 
-function getProviderDisplayName(view) {
+function getViewProviderDisplayName(view) {
   return windowManager.PROVIDERS[view?.providerKey]?.name || view?.providerKey || 'Unknown Provider';
 }
 
 function getPaneEntries() {
   return mainWindow?.getPaneEntries ? mainWindow.getPaneEntries() : [];
+}
+
+function getProviderDisplayName(providerKey) {
+  return windowManager.PROVIDERS[providerKey]?.name || providerKey || 'Unknown Provider';
+}
+
+function getPaneLabel(paneEntry) {
+  return `${getProviderDisplayName(paneEntry?.view?.providerKey)} (${paneEntry?.id || 'pane'})`;
+}
+
+function buildPrivateNewChatResponse(paneEntries, receivedResults) {
+  const expectedResults = paneEntries.map((paneEntry) => {
+    const result = receivedResults.find((entry) => entry.paneId === paneEntry.id);
+    if (result) {
+      return result;
+    }
+
+    return {
+      paneId: paneEntry.id,
+      provider: paneEntry?.view?.providerKey,
+      ok: false,
+      error: 'Timed out while waiting for the page flow to complete.',
+    };
+  });
+
+  const successes = expectedResults.filter((result) => result.ok);
+  const failures = expectedResults.filter((result) => !result.ok);
+  const successLabels = successes.map((result) => {
+    const paneEntry = paneEntries.find((entry) => entry.id === result.paneId);
+    return getPaneLabel(paneEntry);
+  });
+  const failureMessages = failures.map((result) => {
+    const paneEntry = paneEntries.find((entry) => entry.id === result.paneId);
+    return `${getPaneLabel(paneEntry)}: ${result.error || 'Private/temporary chat flow failed.'}`;
+  });
+
+  if (failures.length === 0) {
+    return {
+      ok: true,
+      message: `Opened private/temporary chats for ${successLabels.join(', ')}.`,
+      results: expectedResults,
+    };
+  }
+
+  return {
+    ok: false,
+    message: [
+      successLabels.length > 0 ? `Opened for ${successLabels.join(', ')}.` : 'No pane switched successfully.',
+      `Failed: ${failureMessages.join('; ')}`,
+    ].join(' '),
+    results: expectedResults,
+  };
 }
 
 app.on('ready', async () => {
@@ -160,24 +213,24 @@ app.on('ready', async () => {
     if (!leftResult.ok) {
       return {
         ok: false,
-        message: `${getProviderDisplayName(leftView)} sync failed: ${leftResult.error || 'Unable to inspect the latest reply.'}`,
+        message: `${getViewProviderDisplayName(leftView)} sync failed: ${leftResult.error || 'Unable to inspect the latest reply.'}`,
       };
     }
 
     if (!rightResult.ok) {
       return {
         ok: false,
-        message: `${getProviderDisplayName(rightView)} sync failed: ${rightResult.error || 'Unable to inspect the latest reply.'}`,
+        message: `${getViewProviderDisplayName(rightView)} sync failed: ${rightResult.error || 'Unable to inspect the latest reply.'}`,
       };
     }
 
     if (leftResult.busy || rightResult.busy) {
       const busyProviders = [];
       if (leftResult.busy) {
-        busyProviders.push(getProviderDisplayName(leftView));
+        busyProviders.push(getViewProviderDisplayName(leftView));
       }
       if (rightResult.busy) {
-        busyProviders.push(getProviderDisplayName(rightView));
+        busyProviders.push(getViewProviderDisplayName(rightView));
       }
 
       return {
@@ -193,8 +246,8 @@ app.on('ready', async () => {
       };
     }
 
-    const leftProviderName = getProviderDisplayName(leftView);
-    const rightProviderName = getProviderDisplayName(rightView);
+    const leftProviderName = getViewProviderDisplayName(leftView);
+    const rightProviderName = getViewProviderDisplayName(rightView);
 
     leftView.webContents.send(
       'inject-sync-text',
@@ -273,6 +326,84 @@ app.on('ready', async () => {
     return true;
   });
 
+  ipcMain.handle('private-new-chat', async () => {
+    const supportedProviders = new Set(['grok', 'gemini', 'chatgpt']);
+    const paneEntries = getPaneEntries().filter((paneEntry) => {
+      return supportedProviders.has(paneEntry?.view?.providerKey) && paneEntry?.view?.webContents;
+    });
+
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'Private New Chat needs at least one Grok, Gemini, or ChatGPT pane.',
+        results: [],
+      };
+    }
+
+    const requestId = `private-new-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const responsePromise = new Promise((resolve) => {
+      const timeoutHandle = setTimeout(() => {
+        const pending = pendingPrivateNewChatRequests.get(requestId);
+        if (!pending) {
+          return;
+        }
+
+        pendingPrivateNewChatRequests.delete(requestId);
+        resolve(buildPrivateNewChatResponse(pending.paneEntries, pending.results));
+      }, 12000);
+
+      pendingPrivateNewChatRequests.set(requestId, {
+        paneEntries,
+        results: [],
+        resolve,
+        timeoutHandle,
+      });
+    });
+
+    paneEntries.forEach((paneEntry) => {
+      paneEntry.view.webContents.send('private-new-chat', {
+        requestId,
+        paneId: paneEntry.id,
+      });
+    });
+
+    return responsePromise;
+  });
+
+  ipcMain.handle('private-new-chat-result', async (event, payload) => {
+    const requestId = payload?.requestId;
+    if (!requestId) {
+      return false;
+    }
+
+    const pending = pendingPrivateNewChatRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    const normalizedPayload = {
+      paneId: payload?.paneId || null,
+      provider: payload?.provider || null,
+      ok: Boolean(payload?.ok),
+      error: payload?.error || null,
+    };
+
+    const existingIndex = pending.results.findIndex((entry) => entry.paneId === normalizedPayload.paneId);
+    if (existingIndex >= 0) {
+      pending.results[existingIndex] = normalizedPayload;
+    } else {
+      pending.results.push(normalizedPayload);
+    }
+
+    if (pending.results.length >= pending.paneEntries.length) {
+      clearTimeout(pending.timeoutHandle);
+      pendingPrivateNewChatRequests.delete(requestId);
+      pending.resolve(buildPrivateNewChatResponse(pending.paneEntries, pending.results));
+    }
+
+    return true;
+  });
   // Handle zoom in request
   ipcMain.handle('zoom-in', async (event) => {
     const newZoom = Math.min(currentZoomFactor + 0.1, 2.0); // Max 200%
