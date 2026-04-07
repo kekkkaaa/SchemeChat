@@ -192,6 +192,28 @@ app.on('ready', async () => {
     return null;
   });
 
+  ipcMain.handle('get-discussion-console-expanded', async () => {
+    if (mainWindow && typeof mainWindow.getDiscussionConsoleExpanded === 'function') {
+      return mainWindow.getDiscussionConsoleExpanded();
+    }
+
+    return false;
+  });
+
+  ipcMain.handle('set-discussion-console-expanded', async (event, nextExpanded) => {
+    if (mainWindow && typeof mainWindow.setDiscussionConsoleExpanded === 'function') {
+      return mainWindow.setDiscussionConsoleExpanded(nextExpanded);
+    }
+
+    return false;
+  });
+
+  ipcMain.on('move-discussion-console-by', (event, deltaX, deltaY) => {
+    if (mainWindow && typeof mainWindow.moveDiscussionConsoleBy === 'function') {
+      mainWindow.moveDiscussionConsoleBy(deltaX, deltaY);
+    }
+  });
+
   ipcMain.handle('sync-latest-round', async () => {
     const paneEntries = getPaneEntries();
     if (paneEntries.length !== 2) {
@@ -262,15 +284,6 @@ app.on('ready', async () => {
       ok: true,
       message: `Synced the latest ${leftProviderName} and ${rightProviderName} replies into the opposite input boxes.`,
     };
-  });
-
-  ipcMain.handle('rescan-selectors', async (event) => {
-    getPaneEntries().forEach((paneEntry) => {
-      if (paneEntry.view && paneEntry.view.webContents) {
-        paneEntry.view.webContents.reload();
-      }
-    });
-    return true;
   });
 
   ipcMain.handle('refresh-pages', async (event) => {

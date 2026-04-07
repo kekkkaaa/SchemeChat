@@ -1,5 +1,5 @@
 {
-  "paneCount": 2,
+  "paneCount": 3,
   "layoutMode": "rows",
   "panes": [
     {
@@ -9,6 +9,10 @@
     {
       "id": "pane-2",
       "providerKey": "gemini"
+    },
+    {
+      "id": "pane-3",
+      "providerKey": "grok"
     }
   ]
 }

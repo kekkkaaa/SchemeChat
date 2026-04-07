@@ -27,7 +27,13 @@ body {
   flex: 1;
 }
 
-.settings-btn {
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-btn {
   height: 26px;
   padding: 0 10px;
   border: 1px solid #d7d7da;
@@ -40,10 +46,14 @@ body {
   cursor: pointer;
 }
 
-.settings-btn:hover {
+.topbar-btn:hover {
   background: #f2f2f3;
 }
 
-.settings-btn:active {
+.topbar-btn:active {
   background: #ececee;
+}
+
+.settings-btn {
+  min-width: 58px;
 }

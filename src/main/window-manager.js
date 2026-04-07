@@ -4,7 +4,11 @@ const fs = require('fs');
 const util = require('util');
 
 const TOP_BAR_HEIGHT = 40;
-const CONTROL_BAR_HEIGHT = 100;
+const CONTROL_SURFACE_MARGIN = 20;
+const CONTROL_LAUNCHER_WIDTH = 620;
+const CONTROL_LAUNCHER_HEIGHT = 144;
+const CONTROL_PANEL_WIDTH = 1080;
+const CONTROL_PANEL_HEIGHT = 700;
 const PANE_GAP = 1;
 const DEFAULT_LAYOUT_MODE = 'grid';
 const LAYOUT_MODES = ['grid', 'columns', 'rows'];
@@ -405,6 +409,72 @@ function getLayoutModeLabel(layoutMode) {
   return 'Grid';
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getLauncherBounds(windowBounds) {
+  const availableWidth = Math.max(windowBounds.width - CONTROL_SURFACE_MARGIN * 2, 0);
+  const width = Math.max(
+    Math.min(CONTROL_LAUNCHER_WIDTH, availableWidth),
+    Math.min(420, availableWidth)
+  );
+
+  return {
+    x: Math.max(CONTROL_SURFACE_MARGIN, windowBounds.width - width - CONTROL_SURFACE_MARGIN),
+    y: Math.max(
+      TOP_BAR_HEIGHT + 12,
+      windowBounds.height - CONTROL_LAUNCHER_HEIGHT - CONTROL_SURFACE_MARGIN
+    ),
+    width,
+    height: CONTROL_LAUNCHER_HEIGHT,
+  };
+}
+
+function getPanelSize(windowBounds) {
+  const availableWidth = Math.max(windowBounds.width - CONTROL_SURFACE_MARGIN * 2, 0);
+  const availableHeight = Math.max(
+    windowBounds.height - TOP_BAR_HEIGHT - CONTROL_SURFACE_MARGIN * 2,
+    0
+  );
+
+  return {
+    width: Math.max(
+      Math.min(CONTROL_PANEL_WIDTH, availableWidth),
+      Math.min(360, availableWidth)
+    ),
+    height: Math.max(
+      Math.min(CONTROL_PANEL_HEIGHT, availableHeight),
+      Math.min(360, availableHeight)
+    ),
+  };
+}
+
+function clampPanelBounds(windowBounds, panelBounds) {
+  const minX = CONTROL_SURFACE_MARGIN;
+  const minY = TOP_BAR_HEIGHT + CONTROL_SURFACE_MARGIN;
+  const maxX = Math.max(minX, windowBounds.width - panelBounds.width - CONTROL_SURFACE_MARGIN);
+  const maxY = Math.max(minY, windowBounds.height - panelBounds.height - CONTROL_SURFACE_MARGIN);
+
+  return {
+    x: clampNumber(panelBounds.x, minX, maxX),
+    y: clampNumber(panelBounds.y, minY, maxY),
+    width: panelBounds.width,
+    height: panelBounds.height,
+  };
+}
+
+function getDefaultPanelBounds(windowBounds) {
+  const panelSize = getPanelSize(windowBounds);
+
+  return clampPanelBounds(windowBounds, {
+    x: Math.round((windowBounds.width - panelSize.width) / 2),
+    y: Math.round(TOP_BAR_HEIGHT + Math.max(18, (windowBounds.height - TOP_BAR_HEIGHT - panelSize.height) / 2)),
+    width: panelSize.width,
+    height: panelSize.height,
+  });
+}
+
 function attachEditableContextMenu(webContents) {
   webContents.on('context-menu', (event, params) => {
     const template = [];
@@ -495,8 +565,8 @@ async function createWindow() {
   let currentZoomFactor = 1.0;
   let layoutMode = DEFAULT_LAYOUT_MODE;
   let paneStates = [];
-  const viewPositions = {};
-
+  let discussionConsoleExpanded = false;
+  let discussionConsolePosition = null;
   const topBarView = new WebContentsView({
     webPreferences: {
       nodeIntegration: true,
@@ -530,7 +600,6 @@ async function createWindow() {
   }
 
   function attachPaneState(paneState) {
-    viewPositions[paneState.id] = paneState.view;
     mainWindow.contentView.addChildView(paneState.view);
 
     paneState.view.webContents.on('console-message', (event, level, message) => {
@@ -548,8 +617,6 @@ async function createWindow() {
     if (!paneState) {
       return;
     }
-
-    delete viewPositions[paneState.id];
 
     try {
       mainWindow.contentView.removeChildView(paneState.view);
@@ -599,11 +666,28 @@ async function createWindow() {
     };
   }
 
+  function getDiscussionPanelBounds(windowBounds) {
+    const defaultBounds = getDefaultPanelBounds(windowBounds);
+    const panelSize = getPanelSize(windowBounds);
+    const candidateBounds = {
+      x: typeof discussionConsolePosition?.x === 'number' ? discussionConsolePosition.x : defaultBounds.x,
+      y: typeof discussionConsolePosition?.y === 'number' ? discussionConsolePosition.y : defaultBounds.y,
+      width: panelSize.width,
+      height: panelSize.height,
+    };
+    const nextBounds = clampPanelBounds(windowBounds, candidateBounds);
+    discussionConsolePosition = {
+      x: nextBounds.x,
+      y: nextBounds.y,
+    };
+    return nextBounds;
+  }
+
   function updateBounds() {
     const bounds = mainWindow.getContentBounds();
     const width = bounds.width;
     const height = bounds.height;
-    const chatAreaHeight = Math.max(height - TOP_BAR_HEIGHT - CONTROL_BAR_HEIGHT, 0);
+    const chatAreaHeight = Math.max(height - TOP_BAR_HEIGHT, 0);
     const contentBounds = {
       x: 0,
       y: TOP_BAR_HEIGHT,
@@ -630,12 +714,11 @@ async function createWindow() {
       );
     });
 
-    mainView.setBounds({
-      x: 0,
-      y: TOP_BAR_HEIGHT + chatAreaHeight,
-      width,
-      height: CONTROL_BAR_HEIGHT,
-    });
+    const controlBounds = discussionConsoleExpanded
+      ? getDiscussionPanelBounds(bounds)
+      : getLauncherBounds(bounds);
+
+    mainView.setBounds(controlBounds);
   }
 
   function notifySupersizeState() {
@@ -669,6 +752,45 @@ async function createWindow() {
     paneStates.forEach((paneState) => {
       paneState.view.webContents.setZoomFactor(currentZoomFactor);
     });
+  }
+
+  function setDiscussionConsoleExpanded(nextExpanded) {
+    discussionConsoleExpanded = Boolean(nextExpanded);
+    if (discussionConsoleExpanded && !discussionConsolePosition) {
+      const defaultBounds = getDefaultPanelBounds(mainWindow.getContentBounds());
+      discussionConsolePosition = {
+        x: defaultBounds.x,
+        y: defaultBounds.y,
+      };
+    }
+    updateBounds();
+    return discussionConsoleExpanded;
+  }
+
+  function getDiscussionConsoleExpanded() {
+    return discussionConsoleExpanded;
+  }
+
+  function moveDiscussionConsoleBy(deltaX, deltaY) {
+    if (!discussionConsoleExpanded) {
+      return false;
+    }
+
+    const bounds = mainWindow.getContentBounds();
+    const currentBounds = getDiscussionPanelBounds(bounds);
+    const nextBounds = clampPanelBounds(bounds, {
+      ...currentBounds,
+      x: currentBounds.x + Math.round(Number(deltaX) || 0),
+      y: currentBounds.y + Math.round(Number(deltaY) || 0),
+    });
+
+    discussionConsolePosition = {
+      x: nextBounds.x,
+      y: nextBounds.y,
+    };
+
+    mainView.setBounds(nextBounds);
+    return true;
   }
 
   function applyLayoutSettings(nextSettings = {}) {
@@ -807,7 +929,7 @@ async function createWindow() {
   });
 
   mainView.webContents.on('console-message', (event, level, message) => {
-    safeLog(`[ControlBar] ${message}`);
+    safeLog(`[DiscussionConsole] ${message}`);
   });
 
   topBarView.webContents.loadFile(path.join(__dirname, '../renderer/topbar.html'));
@@ -826,7 +948,6 @@ async function createWindow() {
 
   mainWindow.topBarView = topBarView;
   mainWindow.mainView = mainView;
-  mainWindow.viewPositions = viewPositions;
   mainWindow.getPaneEntries = getPaneEntries;
   mainWindow.getLayoutSettingsState = getLayoutSettingsState;
   mainWindow.applyLayoutSettings = applyLayoutSettings;
@@ -835,6 +956,9 @@ async function createWindow() {
   mainWindow.getSupersizedPosition = () => supersizedPaneId;
   mainWindow.setPaneZoomFactor = setPaneZoomFactor;
   mainWindow.getPaneZoomFactor = () => currentZoomFactor;
+  mainWindow.setDiscussionConsoleExpanded = setDiscussionConsoleExpanded;
+  mainWindow.getDiscussionConsoleExpanded = getDiscussionConsoleExpanded;
+  mainWindow.moveDiscussionConsoleBy = moveDiscussionConsoleBy;
   mainWindow.openSettingsModal = openSettingsModal;
   mainWindow.closeSettingsModal = closeSettingsModal;
 

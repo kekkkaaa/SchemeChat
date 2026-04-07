@@ -1,52 +1,210 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PolyGPT Control Bar</title>
+  <title>SchemeChat Discussion Console</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="container">
-    <div class="input-wrapper">
-      <textarea
-        id="textInput"
-        class="text-input"
-        placeholder="Type here to mirror to all panes..."
-        spellcheck="true"
-      ></textarea>
-      <div class="input-info">
-        <div class="info-group">
-          <span><span id="charCount">0</span> characters</span>
-          <span><kbd>Enter</kbd> to submit | <kbd>Shift+Enter</kbd> for new line</span>
-          <span id="syncStatus" class="sync-status">Ready to sync latest replies</span>
+  <div class="surface-shell">
+    <section id="launcherCard" class="launcher-card">
+      <div class="launcher-top">
+        <div class="badge-row">
+          <span id="dockStageBadge" class="badge badge-stage">准备开始</span>
+          <span id="dockModeBadge" class="badge">4 轮标准</span>
+          <span id="dockStateBadge" class="badge badge-subtle">待生成</span>
         </div>
-        <div class="button-group">
-          <button id="newChatBtn" class="action-btn new-chat-btn" title="Start new chat in all panes">
-            <span class="btn-icon" aria-hidden="true">+</span>
-            <span>New Chat</span>
-          </button>
-          <button id="privateNewChatBtn" class="action-btn private-chat-btn" title="Open private or temporary chats in Grok, Gemini, and ChatGPT">
-            <span class="btn-icon" aria-hidden="true">P</span>
-            <span>Private New Chat</span>
-          </button>
-          <button id="syncBtn" class="action-btn sync-btn" title="Capture the latest stable replies and cross-sync them across all panes">
-            <span class="btn-icon" aria-hidden="true">S</span>
-            <span>Sync</span>
-          </button>
-          <button id="sendBtn" class="action-btn send-btn" title="Send current input to all panes">
-            <span class="btn-icon" aria-hidden="true">></span>
-            <span>Send</span>
-          </button>
-          <button id="refreshBtn" class="action-btn refresh-btn" title="Refresh all pages">
-            <span class="btn-icon" aria-hidden="true">R</span>
-            <span>Refresh</span>
-          </button>
-          <button id="zoomOutBtn" class="action-btn zoom-btn zoom-out-btn" title="Zoom out">-</button>
-          <button id="zoomInBtn" class="action-btn zoom-btn zoom-in-btn" title="Zoom in">+</button>
+        <button id="toggleConsoleBtn" class="ghost-btn" type="button">打开工作台</button>
+      </div>
+
+      <div class="launcher-main">
+        <div class="launcher-input-shell">
+          <label id="dockInputLabel" class="field-label" for="dockInput">讨论主题</label>
+          <textarea
+            id="dockInput"
+            class="launcher-input"
+            placeholder="先写讨论主题，再开始首轮。"
+            spellcheck="true"
+          ></textarea>
+        </div>
+
+        <div class="launcher-actions">
+          <button id="launcherPrivateBtn" class="action-btn utility-btn-dark" type="button">临时对话</button>
+          <button id="launcherSyncBtn" class="action-btn utility-btn-green" type="button">同步</button>
+          <button id="launcherPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
         </div>
       </div>
-    </div>
+
+      <div class="launcher-bottom">
+        <span id="syncStatus" class="status-line">准备开始首轮讨论。</span>
+      </div>
+    </section>
+
+    <section id="floatingPanel" class="floating-panel hidden">
+      <div id="panelDragHandle" class="panel-titlebar">
+        <div class="title-copy">
+          <p id="workspaceEyebrow" class="workspace-eyebrow">Discussion Console</p>
+          <h1 id="workspaceTitle" class="workspace-title">准备讨论主题</h1>
+          <p id="workspaceSubtitle" class="workspace-subtitle">这是一个可拖动的讨论工作台，不再占用聊天区域布局。</p>
+        </div>
+
+        <div class="title-actions">
+          <span id="draftStatusBadge" class="status-pill">待生成</span>
+          <button id="collapseConsoleBtn" class="ghost-btn" type="button">收起</button>
+        </div>
+      </div>
+
+      <div class="panel-summary">
+        <div class="badge-row">
+          <span id="stageBadge" class="badge badge-stage">准备开始</span>
+          <span id="roundBadge" class="badge">第 0 / 4 轮</span>
+          <span id="modeBadge" class="badge">4 轮标准</span>
+        </div>
+
+        <div class="summary-grid">
+          <div class="summary-card">
+            <span class="field-label">本轮目标</span>
+            <span id="roundGoalText">先明确问题，再生成首轮 Draft。</span>
+          </div>
+
+          <div class="summary-card">
+            <span class="field-label">发言范围</span>
+            <span id="speakerScopeText">等待检测参与 AI 面板</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-scroll">
+        <div class="toolbar-row">
+          <button id="draftSourcesBtn" class="tool-btn" type="button">查看 Draft 来源</button>
+          <button id="resetRulesBtn" class="tool-btn" type="button">恢复默认规则</button>
+        </div>
+
+        <div id="draftSourcesPanel" class="draft-sources-panel hidden">
+          <div class="source-grid">
+            <div class="source-item">
+              <span class="source-label">核心问题</span>
+              <span id="sourceQuestionValue" class="source-value">尚未填写</span>
+            </div>
+
+            <div class="source-item">
+              <span class="source-label">常驻规则</span>
+              <span id="sourceRulesValue" class="source-value">0 条</span>
+            </div>
+
+            <div class="source-item">
+              <span class="source-label">阶段模板</span>
+              <span id="sourceTemplateValue" class="source-value">首轮独立分析模板</span>
+            </div>
+
+            <div class="source-item">
+              <span class="source-label">临时补充</span>
+              <span id="sourceTemporaryValue" class="source-value">无</span>
+            </div>
+          </div>
+        </div>
+
+        <section class="info-grid">
+          <div class="info-card">
+            <div class="info-card-header">
+              <span>常驻规则</span>
+            </div>
+            <div id="stickyRuleTags" class="tag-row"></div>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-header">
+              <span>本轮补充</span>
+              <span class="field-hint">只在当前轮生效</span>
+            </div>
+            <div id="temporaryTagRow" class="tag-row"></div>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-header">
+              <span>参与 AI</span>
+              <span id="participantCountBadge" class="field-hint">0 个参与 AI</span>
+            </div>
+            <div id="participantTags" class="tag-row"></div>
+          </div>
+        </section>
+
+        <section class="editor-card">
+          <div class="editor-toolbar">
+            <div>
+              <span class="field-label">轮次模式</span>
+              <p id="modeDescription" class="field-hint">默认推荐 4 轮标准模式</p>
+            </div>
+            <div id="modeSelector" class="segment-control"></div>
+          </div>
+
+          <div id="idlePanel" class="editor-panel">
+            <label class="field-label" for="topicInput">讨论主题</label>
+            <textarea
+              id="topicInput"
+              class="editor-textarea topic-textarea"
+              placeholder="描述这次要让多个 AI 讨论的问题、任务或方案..."
+              spellcheck="true"
+            ></textarea>
+
+            <div class="editor-grid">
+              <div class="sub-card">
+                <label class="field-label" for="roundNoteInput">本轮备注</label>
+                <textarea
+                  id="roundNoteInput"
+                  class="editor-textarea note-textarea"
+                  placeholder="可选：补充本轮特殊要求..."
+                  spellcheck="true"
+                ></textarea>
+              </div>
+
+              <div class="sub-card">
+                <div class="info-card-header">
+                  <span>快捷强调</span>
+                  <span class="field-hint">点一下就加入本轮补充</span>
+                </div>
+                <div id="quickPromptRow" class="tag-row"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="draftPanel" class="editor-panel hidden">
+            <label class="field-label" for="draftInput">本轮 Draft</label>
+            <textarea
+              id="draftInput"
+              class="editor-textarea draft-textarea"
+              placeholder="生成后的 Draft 会显示在这里。"
+              spellcheck="true"
+            ></textarea>
+
+            <div class="draft-footnote">
+              <span id="charCountLine"><span id="charCount">0</span> 字</span>
+              <span>这里适合做完整编辑，启动条更适合快速补一句。</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="panel-footer">
+        <div class="footer-status">
+          <span id="panelStatusLine" class="status-line">准备开始首轮讨论。</span>
+          <span id="draftMetaLine" class="field-hint">先输入讨论主题，再生成首轮 Draft。</span>
+        </div>
+
+        <div class="footer-actions">
+          <button id="newChatBtn" class="tool-btn" type="button">新对话</button>
+          <button id="panelPrivateBtn" class="tool-btn" type="button">临时对话</button>
+          <button id="panelSyncBtn" class="tool-btn" type="button">同步</button>
+          <button id="refreshBtn" class="tool-btn" type="button">刷新</button>
+          <button id="zoomOutBtn" class="tool-btn zoom-btn" type="button">-</button>
+          <button id="zoomInBtn" class="tool-btn zoom-btn" type="button">+</button>
+          <button id="regenerateDraftBtn" class="tool-btn" type="button">重生成</button>
+          <button id="resetConsoleBtn" class="tool-btn" type="button">返回准备态</button>
+          <button id="panelPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script src="renderer.js"></script>
