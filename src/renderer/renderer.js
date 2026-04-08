@@ -7,18 +7,21 @@ const MODE_OPTIONS = [
     label: '3 轮快收束',
     totalRounds: 3,
     description: '独立分析 -> 交叉讨论 -> 最终总结',
+    summary: '独立分析 · 交叉讨论',
   },
   {
     id: 'standard-4',
     label: '4 轮标准',
     totalRounds: 4,
     description: '独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结',
+    summary: '独立分析 · 分歧压缩',
   },
   {
     id: 'deep-5',
     label: '5 轮深推演',
     totalRounds: 5,
     description: '独立分析 -> 交叉质疑 -> 修正方案 -> 确认总结者 -> 最终总结',
+    summary: '独立分析 · 修正方案',
   },
 ];
 
@@ -53,19 +56,19 @@ const STICKY_RULE_OPTIONS = [
 const QUICK_PROMPT_OPTIONS = [
   {
     id: 'cost',
-    label: '偏成本视角',
-    tag: '只看成本',
+    label: '成本优先',
+    tag: '成本优先',
     prompt: '这轮请优先从成本、复杂度和落地代价角度判断。',
   },
   {
     id: 'risk',
-    label: '强调风险边界',
-    tag: '强调风险',
+    label: '风险边界',
+    tag: '风险边界',
     prompt: '这轮请明确指出风险边界、不成立条件和潜在副作用。',
   },
   {
     id: 'stance',
-    label: '必须明确表态',
+    label: '明确表态',
     tag: '明确表态',
     prompt: '这轮请直接表态，不要只给模糊分析。',
   },
@@ -86,19 +89,21 @@ const state = {
   draftNeedsRefresh: false,
   sourcesExpanded: false,
   panes: [],
-  feedbackMessage: '准备开始首轮讨论。',
+  feedbackMessage: '先输入讨论主题',
   feedbackIsError: false,
-  feedbackMeta: '先输入讨论主题，再生成首轮 Draft。',
+  feedbackMeta: '写清这轮要讨论的问题、任务或方案。',
 };
 
 let syncInFlight = false;
 let privateNewChatInFlight = false;
 let dragState = null;
+let resizeState = null;
 
 const refs = {
   launcherCard: document.getElementById('launcherCard'),
   floatingPanel: document.getElementById('floatingPanel'),
   panelDragHandle: document.getElementById('panelDragHandle'),
+  panelResizeHandle: document.getElementById('panelResizeHandle'),
   toggleConsoleBtn: document.getElementById('toggleConsoleBtn'),
   collapseConsoleBtn: document.getElementById('collapseConsoleBtn'),
   dockStageBadge: document.getElementById('dockStageBadge'),
@@ -125,11 +130,16 @@ const refs = {
   sourceRulesValue: document.getElementById('sourceRulesValue'),
   sourceTemplateValue: document.getElementById('sourceTemplateValue'),
   sourceTemporaryValue: document.getElementById('sourceTemporaryValue'),
+  draftSourcesSummaryText: document.getElementById('draftSourcesSummaryText'),
+  moreActionsSummaryText: document.getElementById('moreActionsSummaryText'),
   stickyRuleTags: document.getElementById('stickyRuleTags'),
   temporaryTagRow: document.getElementById('temporaryTagRow'),
   participantCountBadge: document.getElementById('participantCountBadge'),
+  participantSummaryText: document.getElementById('participantSummaryText'),
   participantTags: document.getElementById('participantTags'),
   modeDescription: document.getElementById('modeDescription'),
+  modeFlowHint: document.getElementById('modeFlowHint'),
+  supportSummaryMeta: document.getElementById('supportSummaryMeta'),
   modeSelector: document.getElementById('modeSelector'),
   idlePanel: document.getElementById('idlePanel'),
   topicInput: document.getElementById('topicInput'),
@@ -137,7 +147,6 @@ const refs = {
   quickPromptRow: document.getElementById('quickPromptRow'),
   draftPanel: document.getElementById('draftPanel'),
   draftInput: document.getElementById('draftInput'),
-  charCount: document.getElementById('charCount'),
   charCountLine: document.getElementById('charCountLine'),
   panelStatusLine: document.getElementById('panelStatusLine'),
   draftMetaLine: document.getElementById('draftMetaLine'),
@@ -161,6 +170,10 @@ const sendTextUpdate = throttle((text) => {
 
 const moveDiscussionConsoleBy = throttle((deltaX, deltaY) => {
   ipcRenderer.send('move-discussion-console-by', deltaX, deltaY);
+}, 16);
+
+const resizeDiscussionConsoleBy = throttle((deltaX, deltaY) => {
+  ipcRenderer.send('resize-discussion-console-by', deltaX, deltaY);
 }, 16);
 
 function getModeOption() {
@@ -238,6 +251,18 @@ function renderFeedback() {
   refs.draftMetaLine.textContent = state.feedbackMeta;
 }
 
+function refreshIdleFeedback() {
+  if (state.consoleState !== 'idle') {
+    return;
+  }
+
+  setFeedback(state.topic.trim() ? '可生成首轮 Draft' : '先输入讨论主题', {
+    meta: state.topic.trim()
+      ? '可继续补充本轮限制，或直接开始'
+      : '写清这轮要讨论的问题、任务或方案。',
+  });
+}
+
 function markDraftStale(message) {
   if (state.consoleState !== 'draft-ready') {
     return;
@@ -302,24 +327,27 @@ function renderParticipants() {
   refs.participantTags.innerHTML = '';
 
   if (panes.length === 0) {
-    refs.participantTags.appendChild(createStaticChip('未检测到参与面板', 'is-empty'));
-    refs.participantCountBadge.textContent = '0 个参与 AI';
-    refs.speakerScopeText.textContent = '当前没有可发送的 AI 面板';
+    refs.participantTags.appendChild(createStaticChip('等待参与 AI', 'is-empty'));
+    refs.participantCountBadge.textContent = '0 个';
+    refs.participantSummaryText.textContent = '等待参与 AI';
+    refs.participantSummaryText.title = '等待参与 AI';
+    refs.speakerScopeText.textContent = '发言：等待参与 AI';
     return;
   }
 
-  const statusLabel = state.consoleState === 'draft-ready'
-    ? (state.draftSent ? '已接收首轮' : '待接收首轮')
-    : '等待首轮';
+  const participantPreview = panes.map((pane) => pane.providerName).join(' / ');
+  const participantSummary = summarizeText(participantPreview, 24);
 
   panes.forEach((pane) => {
     refs.participantTags.appendChild(
-      createStaticChip(`${pane.providerName} · ${statusLabel}`, 'is-participant')
+      createStaticChip(pane.providerName, 'is-participant')
     );
   });
 
-  refs.participantCountBadge.textContent = `${panes.length} 个参与 AI`;
-  refs.speakerScopeText.textContent = `本轮将发送给 ${panes.length} 个参与 AI`;
+  refs.participantCountBadge.textContent = `${panes.length} 个`;
+  refs.participantSummaryText.textContent = participantSummary;
+  refs.participantSummaryText.title = participantPreview;
+  refs.speakerScopeText.textContent = `发言：${panes.length} 个参与 AI`;
 }
 
 function renderStickyRuleTags() {
@@ -405,8 +433,21 @@ function renderModeSelector() {
 }
 
 function renderDraftSourcesPanel() {
-  refs.draftSourcesPanel.classList.toggle('hidden', !state.sourcesExpanded);
-  refs.draftSourcesBtn.textContent = state.sourcesExpanded ? '收起 Draft 来源' : '查看 Draft 来源';
+  refs.draftSourcesPanel.open = state.sourcesExpanded;
+}
+
+function renderSupportSummaries() {
+  const stickyCount = getStickyRuleOptions().length;
+  const temporaryCount = getQuickPromptOptions().length + (state.roundNote.trim() ? 1 : 0);
+  const topicSummary = state.topic.trim() ? '主题已填' : '待填主题';
+  const ruleSummary = `${stickyCount} 规则`;
+  const tempSummary = temporaryCount > 0 ? `${temporaryCount} 补充` : '无补充';
+
+  refs.supportSummaryMeta.textContent = `${ruleSummary} · ${tempSummary}`;
+  refs.draftSourcesSummaryText.textContent = `${topicSummary} · ${ruleSummary} · ${tempSummary}`;
+  refs.moreActionsSummaryText.textContent = state.consoleState === 'draft-ready'
+    ? '新对话 / 刷新 / 回到准备阶段'
+    : '新对话 / 刷新 / 缩放';
 }
 
 function updateDraftSources() {
@@ -416,7 +457,7 @@ function updateDraftSources() {
 
   const stickyLabels = getStickyRuleOptions().map((option) => option.label);
   refs.sourceRulesValue.textContent = stickyLabels.length > 0 ? stickyLabels.join(' / ') : '0 条';
-  refs.sourceTemplateValue.textContent = '首轮独立分析模板';
+  refs.sourceTemplateValue.textContent = '首轮分析模板';
 
   const temporarySources = getQuickPromptOptions().map((option) => option.tag);
   if (state.roundNote.trim()) {
@@ -430,7 +471,6 @@ function updateDraftSources() {
 
 function updateCharacterCount() {
   const count = state.draft.length;
-  refs.charCount.textContent = String(count);
   refs.charCountLine.textContent = `${count} 字`;
 }
 
@@ -442,54 +482,77 @@ function renderPanelVisibility() {
 function renderHeader() {
   const mode = getModeOption();
   const stateLabel = getDraftStateLabel();
+  const paneCount = getPaneEntries().length;
 
   refs.modeBadge.textContent = mode.label;
   refs.dockModeBadge.textContent = mode.label;
-  refs.modeDescription.textContent = mode.description;
+  refs.modeDescription.textContent = mode.summary || mode.description;
+  refs.modeDescription.title = mode.description;
+  refs.modeFlowHint.textContent = mode.description;
+  refs.modeFlowHint.title = mode.description;
+  refs.workspaceEyebrow.textContent = '讨论工作台';
 
   if (state.consoleState === 'draft-ready') {
-    refs.stageBadge.textContent = '首轮独立分析';
-    refs.dockStageBadge.textContent = '首轮独立分析';
+    refs.stageBadge.textContent = '首轮分析';
+    refs.dockStageBadge.textContent = '首轮分析';
     refs.roundBadge.textContent = `第 1 / ${mode.totalRounds} 轮`;
     refs.roundGoalText.textContent = '让每个 AI 先独立给出高压缩、可转述的首轮判断。';
-    refs.workspaceEyebrow.textContent = 'Round 1 Workspace';
-    refs.workspaceTitle.textContent = state.draftSent ? '首轮 Draft 已发送' : '首轮 Draft 已就绪';
-    refs.workspaceSubtitle.textContent = state.draftSent
-      ? '你仍然可以继续微调这份 Draft，需要的话再次发送。'
-      : '现在可以在工作台里完整编辑，也可以在右下角启动条里快速补一句。';
+    refs.workspaceTitle.textContent = state.topic.trim()
+      ? summarizeText(state.topic, 32)
+      : (state.draftSent ? '首轮 Draft 已发送' : '首轮 Draft 已就绪');
+    refs.workspaceSubtitle.textContent = `第 1 / ${mode.totalRounds} 轮 · 首轮分析 · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`;
 
     refs.draftStatusBadge.textContent = stateLabel;
     refs.draftStatusBadge.className = `status-pill${state.draftNeedsRefresh ? ' is-stale' : (state.draftSent ? ' is-sent' : ' is-editable')}`;
     refs.launcherPrimaryBtn.textContent = state.draftSent ? '再次发送' : '发送首轮';
     refs.panelPrimaryBtn.textContent = state.draftSent ? '再次发送' : '发送首轮';
+    refs.launcherSyncBtn.textContent = '同步';
+    refs.panelSyncBtn.textContent = '同步';
     refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = 'Draft 快速编辑';
-    refs.dockInput.placeholder = '这里可以在结尾补一句，或快速改动本轮 Draft。';
-    refs.regenerateDraftBtn.disabled = false;
-    refs.resetConsoleBtn.disabled = false;
+    refs.dockInputLabel.textContent = 'Draft 编辑';
+    refs.dockInput.placeholder = '修改首轮提示词，或直接再次发送';
     refs.idlePanel.classList.add('hidden');
     refs.draftPanel.classList.remove('hidden');
   } else {
     refs.stageBadge.textContent = '准备开始';
     refs.dockStageBadge.textContent = '准备开始';
     refs.roundBadge.textContent = `第 0 / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = '先明确讨论主题，再生成首轮 Draft。';
-    refs.workspaceEyebrow.textContent = 'Discussion Console';
+    refs.roundGoalText.textContent = '目标：先明确讨论主题，再生成首轮 Draft。';
     refs.workspaceTitle.textContent = '准备讨论主题';
-    refs.workspaceSubtitle.textContent = '这里是可拖动的讨论工作台。只有展开时才会覆盖在页面之上，不再挤压聊天布局。';
+    refs.workspaceSubtitle.textContent = `第 0 / ${mode.totalRounds} 轮 · 准备开始 · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`;
 
     refs.draftStatusBadge.textContent = '待生成';
     refs.draftStatusBadge.className = 'status-pill';
     refs.launcherPrimaryBtn.textContent = '开始首轮';
     refs.panelPrimaryBtn.textContent = '开始首轮';
+    refs.launcherSyncBtn.textContent = '同步';
+    refs.panelSyncBtn.textContent = '同步';
     refs.dockStateBadge.textContent = '待生成';
     refs.dockInputLabel.textContent = '讨论主题';
-    refs.dockInput.placeholder = '先写讨论主题，再开始首轮。';
-    refs.regenerateDraftBtn.disabled = true;
-    refs.resetConsoleBtn.disabled = !state.topic.trim() && !state.roundNote.trim() && state.quickPromptIds.length === 0;
+    refs.dockInput.placeholder = '写清主题后，开始首轮';
     refs.idlePanel.classList.remove('hidden');
     refs.draftPanel.classList.add('hidden');
   }
+}
+
+function renderActionButtons() {
+  const hasPanes = getPaneEntries().length > 0;
+  const hasTopic = Boolean(state.topic.trim());
+  const hasDraft = Boolean(state.draft.trim());
+  const controlsBusy = syncInFlight || privateNewChatInFlight;
+  const canReset = state.consoleState === 'draft-ready'
+    || hasTopic
+    || Boolean(state.roundNote.trim())
+    || state.quickPromptIds.length > 0;
+
+  refs.launcherPrimaryBtn.disabled = controlsBusy || (state.consoleState === 'draft-ready' ? !hasPanes || !hasDraft : !hasTopic);
+  refs.panelPrimaryBtn.disabled = refs.launcherPrimaryBtn.disabled;
+  refs.launcherSyncBtn.disabled = syncInFlight || !hasPanes;
+  refs.panelSyncBtn.disabled = refs.launcherSyncBtn.disabled;
+  refs.launcherPrivateBtn.disabled = controlsBusy || !hasPanes;
+  refs.panelPrivateBtn.disabled = refs.launcherPrivateBtn.disabled;
+  refs.regenerateDraftBtn.disabled = state.consoleState !== 'draft-ready' || !hasTopic;
+  refs.resetConsoleBtn.disabled = !canReset;
 }
 
 function renderInputs() {
@@ -501,17 +564,21 @@ function renderInputs() {
 
 function render() {
   renderPanelVisibility();
+  refs.floatingPanel.classList.toggle('is-idle', state.consoleState === 'idle');
+  refs.floatingPanel.classList.toggle('is-draft-ready', state.consoleState === 'draft-ready');
   renderHeader();
   renderModeSelector();
   renderStickyRuleTags();
   renderQuickPromptRow();
   renderTemporaryTags();
   renderParticipants();
+  renderSupportSummaries();
   renderDraftSourcesPanel();
   updateDraftSources();
   renderInputs();
   updateCharacterCount();
   renderFeedback();
+  renderActionButtons();
 }
 
 function focusPrimaryField() {
@@ -572,23 +639,23 @@ function resetConsoleToIdle() {
   state.draftSent = false;
   state.draftNeedsRefresh = false;
   render();
-  setFeedback('已返回准备态。', {
-    meta: '你可以继续修改讨论主题、轮次模式或本轮补充，再重新生成首轮 Draft。',
+  setFeedback('已回到准备阶段', {
+    meta: '可重写主题、模式或本轮补充，再生成首轮 Draft',
   });
 }
 
 async function generateRoundOneDraft() {
   if (!state.topic.trim()) {
-    setFeedback('请先输入讨论主题。', {
+    setFeedback('先输入讨论主题', {
       error: true,
-      meta: '至少需要一个明确的问题或任务目标，才能生成首轮 Draft。',
+      meta: '至少要有一个明确的问题、任务或方案。',
     });
     focusPrimaryField();
     return;
   }
 
-  setFeedback('正在生成首轮 Draft...', {
-    meta: '系统正在合并核心问题、阶段模板、常驻规则和本轮补充。',
+  setFeedback('正在生成首轮 Draft', {
+    meta: '系统正在合并主题、模式和本轮补充',
   });
 
   state.draft = buildRoundOneDraft();
@@ -598,8 +665,8 @@ async function generateRoundOneDraft() {
   render();
   sendTextUpdate(state.draft);
   focusPrimaryField();
-  setFeedback('首轮 Draft 已生成。', {
-    meta: `当前 Draft 将发送给 ${Math.max(getPaneEntries().length, 0)} 个参与 AI。发送前可以继续修改。`,
+  setFeedback('已生成首轮 Draft，可发送', {
+    meta: `将发送给 ${Math.max(getPaneEntries().length, 0)} 个参与 AI；发送前可继续修改`,
   });
 }
 
@@ -665,9 +732,8 @@ async function syncLatestRound() {
   }
 
   syncInFlight = true;
-  refs.launcherSyncBtn.disabled = true;
-  refs.panelSyncBtn.disabled = true;
-  setFeedback('正在同步最新回复...', {
+  render();
+  setFeedback('正在同步最新回复', {
     meta: '系统会抓取每侧最新稳定回复，并交叉写入对侧输入框。',
   });
 
@@ -687,8 +753,7 @@ async function syncLatestRound() {
     });
   } finally {
     syncInFlight = false;
-    refs.launcherSyncBtn.disabled = false;
-    refs.panelSyncBtn.disabled = false;
+    render();
   }
 }
 
@@ -698,9 +763,8 @@ async function triggerPrivateNewChat() {
   }
 
   privateNewChatInFlight = true;
-  refs.launcherPrivateBtn.disabled = true;
-  refs.panelPrivateBtn.disabled = true;
-  setFeedback('正在打开临时对话...', {
+  render();
+  setFeedback('正在打开临时对话', {
     meta: '会同时尝试触发 Grok private、ChatGPT temporary、Gemini temporary。',
   });
 
@@ -720,8 +784,7 @@ async function triggerPrivateNewChat() {
     });
   } finally {
     privateNewChatInFlight = false;
-    refs.launcherPrivateBtn.disabled = false;
-    refs.panelPrivateBtn.disabled = false;
+    render();
   }
 }
 
@@ -737,6 +800,7 @@ function updateDockValue(nextValue) {
 
   state.topic = nextValue;
   render();
+  refreshIdleFeedback();
 }
 
 function handleDragMove(event) {
@@ -754,11 +818,33 @@ function handleDragMove(event) {
   }
 }
 
+function handleResizeMove(event) {
+  if (!resizeState) {
+    return;
+  }
+
+  const deltaX = event.screenX - resizeState.lastScreenX;
+  const deltaY = event.screenY - resizeState.lastScreenY;
+  resizeState.lastScreenX = event.screenX;
+  resizeState.lastScreenY = event.screenY;
+
+  if (deltaX !== 0 || deltaY !== 0) {
+    resizeDiscussionConsoleBy(deltaX, deltaY);
+  }
+}
+
 function stopDrag() {
   dragState = null;
   window.removeEventListener('mousemove', handleDragMove);
   window.removeEventListener('mouseup', stopDrag);
   window.removeEventListener('blur', stopDrag);
+}
+
+function stopResize() {
+  resizeState = null;
+  window.removeEventListener('mousemove', handleResizeMove);
+  window.removeEventListener('mouseup', stopResize);
+  window.removeEventListener('blur', stopResize);
 }
 
 refs.panelDragHandle.addEventListener('mousedown', (event) => {
@@ -781,6 +867,24 @@ refs.panelDragHandle.addEventListener('mousedown', (event) => {
   event.preventDefault();
 });
 
+if (refs.panelResizeHandle) {
+  refs.panelResizeHandle.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    resizeState = {
+      lastScreenX: event.screenX,
+      lastScreenY: event.screenY,
+    };
+
+    window.addEventListener('mousemove', handleResizeMove);
+    window.addEventListener('mouseup', stopResize);
+    window.addEventListener('blur', stopResize);
+    event.preventDefault();
+  });
+}
+
 refs.toggleConsoleBtn.addEventListener('click', () => {
   setPanelExpanded(true);
 });
@@ -802,13 +906,20 @@ refs.dockInput.addEventListener('keydown', (event) => {
 
 refs.topicInput.addEventListener('input', (event) => {
   state.topic = event.target.value;
+  if (state.consoleState === 'draft-ready') {
+    markDraftStale('已更新讨论主题');
+  }
   render();
+  refreshIdleFeedback();
 });
 
 refs.roundNoteInput.addEventListener('input', (event) => {
   state.roundNote = event.target.value;
-  markDraftStale('已更新本轮备注。');
+  if (state.consoleState === 'draft-ready') {
+    markDraftStale('已更新本轮补充');
+  }
   render();
+  refreshIdleFeedback();
 });
 
 refs.draftInput.addEventListener('input', (event) => {
@@ -828,12 +939,14 @@ refs.draftInput.addEventListener('keydown', (event) => {
 
 refs.resetRulesBtn.addEventListener('click', () => {
   state.stickyRuleIds = [...DEFAULT_STICKY_RULE_IDS];
-  markDraftStale('已恢复默认常驻规则。');
+  if (state.consoleState === 'draft-ready') {
+    markDraftStale('已恢复默认规则');
+  }
   render();
 });
 
-refs.draftSourcesBtn.addEventListener('click', () => {
-  state.sourcesExpanded = !state.sourcesExpanded;
+refs.draftSourcesPanel.addEventListener('toggle', () => {
+  state.sourcesExpanded = refs.draftSourcesPanel.open;
   renderDraftSourcesPanel();
 });
 
@@ -855,6 +968,8 @@ refs.panelPrimaryBtn.addEventListener('click', () => {
 
 refs.newChatBtn.addEventListener('click', () => {
   ipcRenderer.invoke('new-chat').then(() => {
+    state.draftSent = false;
+    render();
     setFeedback('已在所有面板中打开新对话。', {
       meta: '当前工作台内容会保留，你可以继续生成或发送新的 Draft。',
     });
@@ -886,7 +1001,7 @@ refs.panelSyncBtn.addEventListener('click', () => {
 refs.refreshBtn.addEventListener('click', () => {
   ipcRenderer.invoke('refresh-pages').then(() => {
     setFeedback('已刷新所有网页。', {
-      meta: '工作台内容保持不变，但网页面板会重新加载。',
+      meta: '工作台内容保持不变。',
     });
   }).catch((error) => {
     console.error('Failed to refresh pages:', error);
@@ -914,6 +1029,12 @@ ipcRenderer.on('selector-error', (event, payload) => {
     error: true,
     meta: payload?.error || '请检查当前网页是否仍在可交互状态。',
   });
+});
+
+ipcRenderer.on('discussion-console-expanded-changed', (event, nextExpanded) => {
+  state.isPanelExpanded = Boolean(nextExpanded);
+  render();
+  focusPrimaryField();
 });
 
 window.addEventListener('focus', () => {

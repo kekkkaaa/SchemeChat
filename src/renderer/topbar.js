@@ -9,6 +9,10 @@ discussionConsoleBtn.addEventListener('click', () => {
   });
 });
 
+ipcRenderer.on('discussion-console-expanded-changed', (event, nextExpanded) => {
+  discussionConsoleBtn.classList.toggle('is-active', Boolean(nextExpanded));
+});
+
 settingsBtn.addEventListener('click', () => {
   ipcRenderer.invoke('open-settings-modal').catch((error) => {
     console.error('Failed to open settings modal:', error);

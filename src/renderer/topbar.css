@@ -54,6 +54,12 @@ body {
   background: #ececee;
 }
 
+.topbar-btn.is-active {
+  border-color: #b9cff4;
+  background: #eaf2ff;
+  color: #124cae;
+}
+
 .settings-btn {
   min-width: 58px;
 }

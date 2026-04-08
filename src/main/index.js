@@ -1,4 +1,4 @@
-const { app, ipcMain, session, Menu } = require('electron');
+const { app, ipcMain, session, Menu, globalShortcut } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { buildDiscussionPrompt, captureStableLatestReply } = require('./provider-sync');
 const windowManager = require('./window-manager');
@@ -122,6 +122,20 @@ app.on('ready', async () => {
   mainWindow = await windowManager.createWindow();
   hideNativeAppMenu(mainWindow);
 
+  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    if (typeof mainWindow.focus === 'function') {
+      mainWindow.focus();
+    }
+
+    if (typeof mainWindow.setDiscussionConsoleExpanded === 'function') {
+      mainWindow.setDiscussionConsoleExpanded(true);
+    }
+  });
+
   // Check for updates
   autoUpdater.checkForUpdatesAndNotify();
 
@@ -211,6 +225,12 @@ app.on('ready', async () => {
   ipcMain.on('move-discussion-console-by', (event, deltaX, deltaY) => {
     if (mainWindow && typeof mainWindow.moveDiscussionConsoleBy === 'function') {
       mainWindow.moveDiscussionConsoleBy(deltaX, deltaY);
+    }
+  });
+
+  ipcMain.on('resize-discussion-console-by', (event, deltaX, deltaY) => {
+    if (mainWindow && typeof mainWindow.resizeDiscussionConsoleBy === 'function') {
+      mainWindow.resizeDiscussionConsoleBy(deltaX, deltaY);
     }
   });
 
@@ -463,6 +483,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('activate', async () => {

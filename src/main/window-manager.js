@@ -6,9 +6,11 @@ const util = require('util');
 const TOP_BAR_HEIGHT = 40;
 const CONTROL_SURFACE_MARGIN = 20;
 const CONTROL_LAUNCHER_WIDTH = 620;
-const CONTROL_LAUNCHER_HEIGHT = 144;
-const CONTROL_PANEL_WIDTH = 1080;
-const CONTROL_PANEL_HEIGHT = 700;
+const CONTROL_LAUNCHER_HEIGHT = 188;
+const CONTROL_PANEL_DEFAULT_WIDTH = 1220;
+const CONTROL_PANEL_DEFAULT_HEIGHT = 760;
+const CONTROL_PANEL_MIN_WIDTH = 920;
+const CONTROL_PANEL_MIN_HEIGHT = 620;
 const PANE_GAP = 1;
 const DEFAULT_LAYOUT_MODE = 'grid';
 const LAYOUT_MODES = ['grid', 'columns', 'rows'];
@@ -440,27 +442,44 @@ function getPanelSize(windowBounds) {
 
   return {
     width: Math.max(
-      Math.min(CONTROL_PANEL_WIDTH, availableWidth),
-      Math.min(360, availableWidth)
+      Math.min(CONTROL_PANEL_DEFAULT_WIDTH, availableWidth),
+      Math.min(CONTROL_PANEL_MIN_WIDTH, availableWidth)
     ),
     height: Math.max(
-      Math.min(CONTROL_PANEL_HEIGHT, availableHeight),
-      Math.min(360, availableHeight)
+      Math.min(CONTROL_PANEL_DEFAULT_HEIGHT, availableHeight),
+      Math.min(CONTROL_PANEL_MIN_HEIGHT, availableHeight)
     ),
   };
 }
 
 function clampPanelBounds(windowBounds, panelBounds) {
+  const availableWidth = Math.max(windowBounds.width - CONTROL_SURFACE_MARGIN * 2, 0);
+  const availableHeight = Math.max(
+    windowBounds.height - TOP_BAR_HEIGHT - CONTROL_SURFACE_MARGIN * 2,
+    0
+  );
+  const minWidth = Math.min(CONTROL_PANEL_MIN_WIDTH, availableWidth);
+  const minHeight = Math.min(CONTROL_PANEL_MIN_HEIGHT, availableHeight);
+  const width = clampNumber(
+    Math.round(Number(panelBounds.width) || 0),
+    minWidth,
+    availableWidth
+  );
+  const height = clampNumber(
+    Math.round(Number(panelBounds.height) || 0),
+    minHeight,
+    availableHeight
+  );
   const minX = CONTROL_SURFACE_MARGIN;
   const minY = TOP_BAR_HEIGHT + CONTROL_SURFACE_MARGIN;
-  const maxX = Math.max(minX, windowBounds.width - panelBounds.width - CONTROL_SURFACE_MARGIN);
-  const maxY = Math.max(minY, windowBounds.height - panelBounds.height - CONTROL_SURFACE_MARGIN);
+  const maxX = Math.max(minX, windowBounds.width - width - CONTROL_SURFACE_MARGIN);
+  const maxY = Math.max(minY, windowBounds.height - height - CONTROL_SURFACE_MARGIN);
 
   return {
     x: clampNumber(panelBounds.x, minX, maxX),
     y: clampNumber(panelBounds.y, minY, maxY),
-    width: panelBounds.width,
-    height: panelBounds.height,
+    width,
+    height,
   };
 }
 
@@ -567,6 +586,7 @@ async function createWindow() {
   let paneStates = [];
   let discussionConsoleExpanded = false;
   let discussionConsolePosition = null;
+  let discussionConsoleSize = null;
   const topBarView = new WebContentsView({
     webPreferences: {
       nodeIntegration: true,
@@ -668,19 +688,32 @@ async function createWindow() {
 
   function getDiscussionPanelBounds(windowBounds) {
     const defaultBounds = getDefaultPanelBounds(windowBounds);
-    const panelSize = getPanelSize(windowBounds);
     const candidateBounds = {
       x: typeof discussionConsolePosition?.x === 'number' ? discussionConsolePosition.x : defaultBounds.x,
       y: typeof discussionConsolePosition?.y === 'number' ? discussionConsolePosition.y : defaultBounds.y,
-      width: panelSize.width,
-      height: panelSize.height,
+      width: typeof discussionConsoleSize?.width === 'number' ? discussionConsoleSize.width : defaultBounds.width,
+      height: typeof discussionConsoleSize?.height === 'number' ? discussionConsoleSize.height : defaultBounds.height,
     };
     const nextBounds = clampPanelBounds(windowBounds, candidateBounds);
     discussionConsolePosition = {
       x: nextBounds.x,
       y: nextBounds.y,
     };
+    discussionConsoleSize = {
+      width: nextBounds.width,
+      height: nextBounds.height,
+    };
     return nextBounds;
+  }
+
+  function notifyDiscussionConsoleExpandedChanged() {
+    if (mainView?.webContents) {
+      mainView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
+    }
+
+    if (topBarView?.webContents) {
+      topBarView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
+    }
   }
 
   function updateBounds() {
@@ -762,8 +795,13 @@ async function createWindow() {
         x: defaultBounds.x,
         y: defaultBounds.y,
       };
+      discussionConsoleSize = {
+        width: defaultBounds.width,
+        height: defaultBounds.height,
+      };
     }
     updateBounds();
+    notifyDiscussionConsoleExpandedChanged();
     return discussionConsoleExpanded;
   }
 
@@ -787,6 +825,32 @@ async function createWindow() {
     discussionConsolePosition = {
       x: nextBounds.x,
       y: nextBounds.y,
+    };
+
+    mainView.setBounds(nextBounds);
+    return true;
+  }
+
+  function resizeDiscussionConsoleBy(deltaX, deltaY) {
+    if (!discussionConsoleExpanded) {
+      return false;
+    }
+
+    const bounds = mainWindow.getContentBounds();
+    const currentBounds = getDiscussionPanelBounds(bounds);
+    const nextBounds = clampPanelBounds(bounds, {
+      ...currentBounds,
+      width: currentBounds.width + Math.round(Number(deltaX) || 0),
+      height: currentBounds.height + Math.round(Number(deltaY) || 0),
+    });
+
+    discussionConsolePosition = {
+      x: nextBounds.x,
+      y: nextBounds.y,
+    };
+    discussionConsoleSize = {
+      width: nextBounds.width,
+      height: nextBounds.height,
     };
 
     mainView.setBounds(nextBounds);
@@ -922,14 +986,23 @@ async function createWindow() {
   mainWindow.contentView.addChildView(topBarView);
   mainWindow.contentView.addChildView(mainView);
 
+  mainWindow.on('resize', updateBounds);
   mainWindow.on('resized', updateBounds);
 
   topBarView.webContents.on('console-message', (event, level, message) => {
     safeLog(`[TopBar] ${message}`);
   });
 
+  topBarView.webContents.on('did-finish-load', () => {
+    topBarView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
+  });
+
   mainView.webContents.on('console-message', (event, level, message) => {
     safeLog(`[DiscussionConsole] ${message}`);
+  });
+
+  mainView.webContents.on('did-finish-load', () => {
+    mainView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
   });
 
   topBarView.webContents.loadFile(path.join(__dirname, '../renderer/topbar.html'));
@@ -959,6 +1032,7 @@ async function createWindow() {
   mainWindow.setDiscussionConsoleExpanded = setDiscussionConsoleExpanded;
   mainWindow.getDiscussionConsoleExpanded = getDiscussionConsoleExpanded;
   mainWindow.moveDiscussionConsoleBy = moveDiscussionConsoleBy;
+  mainWindow.resizeDiscussionConsoleBy = resizeDiscussionConsoleBy;
   mainWindow.openSettingsModal = openSettingsModal;
   mainWindow.closeSettingsModal = closeSettingsModal;
 

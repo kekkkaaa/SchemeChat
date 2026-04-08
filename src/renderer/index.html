@@ -10,23 +10,26 @@
   <div class="surface-shell">
     <section id="launcherCard" class="launcher-card">
       <div class="launcher-top">
-        <div class="badge-row">
-          <span id="dockStageBadge" class="badge badge-stage">准备开始</span>
-          <span id="dockModeBadge" class="badge">4 轮标准</span>
-          <span id="dockStateBadge" class="badge badge-subtle">待生成</span>
+        <div class="launcher-meta-row">
+          <div class="badge-row">
+            <span id="dockStageBadge" class="badge badge-stage">准备开始</span>
+            <span id="dockModeBadge" class="badge">4 轮标准</span>
+            <span id="dockStateBadge" class="badge badge-subtle">待生成</span>
+          </div>
+          <label id="dockInputLabel" class="field-label launcher-inline-label" for="dockInput">讨论主题</label>
         </div>
-        <button id="toggleConsoleBtn" class="ghost-btn" type="button">打开工作台</button>
+        <button id="toggleConsoleBtn" class="ghost-btn" type="button">展开工作台</button>
       </div>
 
       <div class="launcher-main">
         <div class="launcher-input-shell">
-          <label id="dockInputLabel" class="field-label" for="dockInput">讨论主题</label>
           <textarea
             id="dockInput"
             class="launcher-input"
             placeholder="先写讨论主题，再开始首轮。"
             spellcheck="true"
           ></textarea>
+          <span id="syncStatus" class="status-line launcher-status-line">准备开始首轮讨论。</span>
         </div>
 
         <div class="launcher-actions">
@@ -35,18 +38,15 @@
           <button id="launcherPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
         </div>
       </div>
-
-      <div class="launcher-bottom">
-        <span id="syncStatus" class="status-line">准备开始首轮讨论。</span>
-      </div>
     </section>
 
     <section id="floatingPanel" class="floating-panel hidden">
       <div id="panelDragHandle" class="panel-titlebar">
         <div class="title-copy">
-          <p id="workspaceEyebrow" class="workspace-eyebrow">Discussion Console</p>
+          <p id="workspaceEyebrow" class="workspace-eyebrow">讨论工作台</p>
           <h1 id="workspaceTitle" class="workspace-title">准备讨论主题</h1>
-          <p id="workspaceSubtitle" class="workspace-subtitle">这是一个可拖动的讨论工作台，不再占用聊天区域布局。</p>
+          <p id="workspaceSubtitle" class="workspace-subtitle">第 0 / 4 轮 · 准备开始</p>
+          <p id="roundGoalText" class="workspace-goal">目标：先明确讨论主题，再生成首轮 Draft。</p>
         </div>
 
         <div class="title-actions">
@@ -55,153 +55,176 @@
         </div>
       </div>
 
-      <div class="panel-summary">
+      <div class="panel-statusline">
         <div class="badge-row">
           <span id="stageBadge" class="badge badge-stage">准备开始</span>
           <span id="roundBadge" class="badge">第 0 / 4 轮</span>
           <span id="modeBadge" class="badge">4 轮标准</span>
         </div>
-
-        <div class="summary-grid">
-          <div class="summary-card">
-            <span class="field-label">本轮目标</span>
-            <span id="roundGoalText">先明确问题，再生成首轮 Draft。</span>
-          </div>
-
-          <div class="summary-card">
-            <span class="field-label">发言范围</span>
-            <span id="speakerScopeText">等待检测参与 AI 面板</span>
-          </div>
-        </div>
+        <span id="speakerScopeText" class="field-hint">发言：等待参与 AI</span>
       </div>
 
-      <div class="panel-scroll">
-        <div class="toolbar-row">
-          <button id="draftSourcesBtn" class="tool-btn" type="button">查看 Draft 来源</button>
-          <button id="resetRulesBtn" class="tool-btn" type="button">恢复默认规则</button>
-        </div>
-
-        <div id="draftSourcesPanel" class="draft-sources-panel hidden">
-          <div class="source-grid">
-            <div class="source-item">
-              <span class="source-label">核心问题</span>
-              <span id="sourceQuestionValue" class="source-value">尚未填写</span>
+      <div class="workspace-layout">
+        <section class="composer-column">
+          <section class="composer-card context-card">
+            <div class="composer-header">
+              <div>
+                <span class="field-label">讨论主题</span>
+                <p class="field-hint">明确本轮问题</p>
+              </div>
+              <div class="mode-selector-stack">
+                <div id="modeSelector" class="segment-control"></div>
+                <p id="modeFlowHint" class="field-hint mode-flow-hint">独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结</p>
+              </div>
             </div>
 
-            <div class="source-item">
-              <span class="source-label">常驻规则</span>
-              <span id="sourceRulesValue" class="source-value">0 条</span>
-            </div>
-
-            <div class="source-item">
-              <span class="source-label">阶段模板</span>
-              <span id="sourceTemplateValue" class="source-value">首轮独立分析模板</span>
-            </div>
-
-            <div class="source-item">
-              <span class="source-label">临时补充</span>
-              <span id="sourceTemporaryValue" class="source-value">无</span>
-            </div>
-          </div>
-        </div>
-
-        <section class="info-grid">
-          <div class="info-card">
-            <div class="info-card-header">
-              <span>常驻规则</span>
-            </div>
-            <div id="stickyRuleTags" class="tag-row"></div>
-          </div>
-
-          <div class="info-card">
-            <div class="info-card-header">
-              <span>本轮补充</span>
-              <span class="field-hint">只在当前轮生效</span>
-            </div>
-            <div id="temporaryTagRow" class="tag-row"></div>
-          </div>
-
-          <div class="info-card">
-            <div class="info-card-header">
-              <span>参与 AI</span>
-              <span id="participantCountBadge" class="field-hint">0 个参与 AI</span>
-            </div>
-            <div id="participantTags" class="tag-row"></div>
-          </div>
-        </section>
-
-        <section class="editor-card">
-          <div class="editor-toolbar">
-            <div>
-              <span class="field-label">轮次模式</span>
-              <p id="modeDescription" class="field-hint">默认推荐 4 轮标准模式</p>
-            </div>
-            <div id="modeSelector" class="segment-control"></div>
-          </div>
-
-          <div id="idlePanel" class="editor-panel">
-            <label class="field-label" for="topicInput">讨论主题</label>
             <textarea
               id="topicInput"
               class="editor-textarea topic-textarea"
-              placeholder="描述这次要让多个 AI 讨论的问题、任务或方案..."
+              placeholder="写清这轮要讨论的问题、任务或方案"
               spellcheck="true"
             ></textarea>
 
-            <div class="editor-grid">
-              <div class="sub-card">
-                <label class="field-label" for="roundNoteInput">本轮备注</label>
-                <textarea
-                  id="roundNoteInput"
-                  class="editor-textarea note-textarea"
-                  placeholder="可选：补充本轮特殊要求..."
-                  spellcheck="true"
-                ></textarea>
-              </div>
-
-              <div class="sub-card">
-                <div class="info-card-header">
-                  <span>快捷强调</span>
-                  <span class="field-hint">点一下就加入本轮补充</span>
-                </div>
-                <div id="quickPromptRow" class="tag-row"></div>
-              </div>
+            <div id="idlePanel" class="idle-panel">
+              <span class="status-line">还没有首轮 Draft</span>
+              <span class="field-hint">写清主题后，直接生成</span>
             </div>
-          </div>
+          </section>
 
-          <div id="draftPanel" class="editor-panel hidden">
-            <label class="field-label" for="draftInput">本轮 Draft</label>
+          <section id="draftPanel" class="composer-card draft-card hidden">
+            <div class="composer-header">
+              <div>
+                <span class="field-label">本轮 Draft</span>
+                <p id="draftMetaLine" class="field-hint">先输入讨论主题，再生成首轮 Draft。</p>
+              </div>
+              <button id="regenerateDraftBtn" class="tool-btn" type="button">重新生成</button>
+            </div>
+
             <textarea
               id="draftInput"
               class="editor-textarea draft-textarea"
-              placeholder="生成后的 Draft 会显示在这里。"
+              placeholder="生成后的 Draft 会显示在这里"
               spellcheck="true"
             ></textarea>
 
             <div class="draft-footnote">
-              <span id="charCountLine"><span id="charCount">0</span> 字</span>
-              <span>这里适合做完整编辑，启动条更适合快速补一句。</span>
+              <span id="charCountLine" class="footnote-pill">0 字</span>
+              <span>发送前可直接改正文。</span>
             </div>
-          </div>
+          </section>
         </section>
+
+        <aside class="support-column">
+          <details class="support-disclosure support-primary-disclosure">
+            <summary class="disclosure-summary support-primary-summary">
+              <div class="support-summary-copy">
+                <span class="field-label">本轮指令</span>
+                <span id="modeDescription" class="field-hint">默认推荐 4 轮标准模式</span>
+              </div>
+              <span id="supportSummaryMeta" class="summary-meta">5 条规则 · 无补充</span>
+            </summary>
+
+            <div class="support-body">
+              <div class="support-group support-group-primary">
+                <div class="support-group-header">
+                  <span class="group-label">常驻规则</span>
+                  <button id="resetRulesBtn" class="tool-btn support-inline-btn" type="button">恢复默认</button>
+                </div>
+                <div id="stickyRuleTags" class="tag-row"></div>
+              </div>
+
+              <div class="support-group">
+                <span class="group-label">快捷补充</span>
+                <div id="quickPromptRow" class="tag-row"></div>
+              </div>
+
+              <div class="support-group">
+                <label class="group-label" for="roundNoteInput">本轮补充</label>
+                <textarea
+                  id="roundNoteInput"
+                  class="editor-textarea note-textarea"
+                  placeholder="只补充这一轮需要新增的限制"
+                  spellcheck="true"
+                ></textarea>
+                <div id="temporaryTagRow" class="tag-row compact-tags"></div>
+              </div>
+            </div>
+          </details>
+
+          <details class="support-disclosure participant-disclosure">
+            <summary class="disclosure-summary participant-summary">
+              <div class="support-summary-copy participant-summary-copy">
+                <span class="field-label">参与 AI</span>
+                <span id="participantSummaryText" class="field-hint participant-summary-text">等待参与 AI</span>
+              </div>
+              <span id="participantCountBadge" class="summary-meta">0 个</span>
+            </summary>
+            <div id="participantTags" class="tag-row participant-tags-row"></div>
+          </details>
+
+          <details id="draftSourcesPanel" class="support-disclosure">
+            <summary id="draftSourcesBtn" class="disclosure-summary">
+              <div class="support-summary-copy">
+                <span class="field-label">Draft 来源</span>
+                <span id="draftSourcesSummaryText" class="field-hint">主题 / 规则 / 模板</span>
+              </div>
+              <span class="summary-meta">4 项</span>
+            </summary>
+            <div class="source-grid">
+              <div class="source-item">
+                <span class="source-label">核心问题</span>
+                <span id="sourceQuestionValue" class="source-value">尚未填写</span>
+              </div>
+
+              <div class="source-item">
+                <span class="source-label">常驻规则</span>
+                <span id="sourceRulesValue" class="source-value">0 条</span>
+              </div>
+
+              <div class="source-item">
+                <span class="source-label">阶段模板</span>
+                <span id="sourceTemplateValue" class="source-value">首轮分析模板</span>
+              </div>
+
+              <div class="source-item">
+                <span class="source-label">临时补充</span>
+                <span id="sourceTemporaryValue" class="source-value">无</span>
+              </div>
+            </div>
+          </details>
+
+          <details class="support-disclosure">
+            <summary class="disclosure-summary">
+              <div class="support-summary-copy">
+                <span class="field-label">更多操作</span>
+                <span id="moreActionsSummaryText" class="field-hint">新对话 / 刷新 / 缩放</span>
+              </div>
+              <span class="summary-meta">5 项</span>
+            </summary>
+            <div class="more-actions-grid">
+              <button id="newChatBtn" class="tool-btn" type="button">新对话</button>
+              <button id="refreshBtn" class="tool-btn" type="button">刷新网页</button>
+              <button id="zoomOutBtn" class="tool-btn" type="button">缩小页面</button>
+              <button id="zoomInBtn" class="tool-btn" type="button">放大页面</button>
+              <button id="resetConsoleBtn" class="tool-btn" type="button">回到准备阶段</button>
+            </div>
+          </details>
+        </aside>
       </div>
 
       <div class="panel-footer">
         <div class="footer-status">
           <span id="panelStatusLine" class="status-line">准备开始首轮讨论。</span>
-          <span id="draftMetaLine" class="field-hint">先输入讨论主题，再生成首轮 Draft。</span>
         </div>
 
         <div class="footer-actions">
-          <button id="newChatBtn" class="tool-btn" type="button">新对话</button>
           <button id="panelPrivateBtn" class="tool-btn" type="button">临时对话</button>
           <button id="panelSyncBtn" class="tool-btn" type="button">同步</button>
-          <button id="refreshBtn" class="tool-btn" type="button">刷新</button>
-          <button id="zoomOutBtn" class="tool-btn zoom-btn" type="button">-</button>
-          <button id="zoomInBtn" class="tool-btn zoom-btn" type="button">+</button>
-          <button id="regenerateDraftBtn" class="tool-btn" type="button">重生成</button>
-          <button id="resetConsoleBtn" class="tool-btn" type="button">返回准备态</button>
           <button id="panelPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
+        </div>
+
+        <div class="footer-corner">
+          <button id="panelResizeHandle" class="panel-resize-handle" type="button" aria-label="调整工作台大小"></button>
         </div>
       </div>
     </section>
