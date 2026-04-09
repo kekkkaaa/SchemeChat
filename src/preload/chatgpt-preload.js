@@ -13,12 +13,7 @@ const {
   delay,
   setupIPCListeners,
   setupInputScanner,
-  createUIControls,
-  setupViewInfoListener,
-  setupSupersizeListener,
-  setupLoadingOverlay,
   waitForCondition,
-  waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
@@ -250,17 +245,3 @@ setupInputScanner(
   (el) => { inputElement = el; },
   null
 );
-
-const getViewInfo = setupViewInfoListener((viewInfo) => {
-  window.polygptGetViewInfo = () => viewInfo;
-  createUIControls(viewInfo);
-});
-
-setupSupersizeListener();
-
-setupLoadingOverlay();
-
-waitForDOM(() => {
-  const viewInfo = getViewInfo();
-  if (viewInfo) createUIControls(viewInfo);
-});

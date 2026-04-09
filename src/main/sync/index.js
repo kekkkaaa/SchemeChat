@@ -1,4 +1,13 @@
-const { buildAggregatedDiscussionPrompt, buildDiscussionPrompt } = require('./prompt-builder');
+const {
+  buildAggregatedDiscussionPrompt,
+  buildCompressionPrompt,
+  buildConfirmationPrompt,
+  buildDiscussionPrompt,
+  buildFinalSummaryPrompt,
+  buildQuestioningPrompt,
+  buildRevisionPrompt,
+  buildRoundPrompt,
+} = require('./prompt-builder');
 const { getExtractor } = require('./registry');
 const { captureStableLatestReplyForView, syncPaneEntries } = require('./orchestrator');
 
@@ -33,7 +42,13 @@ async function captureStableLatestReply(view) {
 
 module.exports = {
   buildAggregatedDiscussionPrompt,
+  buildCompressionPrompt,
+  buildConfirmationPrompt,
   buildDiscussionPrompt,
+  buildFinalSummaryPrompt,
+  buildQuestioningPrompt,
+  buildRevisionPrompt,
+  buildRoundPrompt,
   captureStableLatestReply,
   inspectProviderView,
   syncPaneEntries,

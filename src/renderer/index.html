@@ -18,7 +18,10 @@
           </div>
           <label id="dockInputLabel" class="field-label launcher-inline-label" for="dockInput">讨论主题</label>
         </div>
-        <button id="toggleConsoleBtn" class="ghost-btn" type="button">展开工作台</button>
+        <div class="launcher-top-actions">
+          <button id="launcherRunModeBtn" class="ghost-btn" type="button">手动推进</button>
+          <button id="toggleConsoleBtn" class="ghost-btn" type="button">展开工作台</button>
+        </div>
       </div>
 
       <div class="launcher-main">
@@ -35,6 +38,7 @@
         <div class="launcher-actions">
           <button id="launcherPrivateBtn" class="action-btn utility-btn-dark" type="button">临时对话</button>
           <button id="launcherSyncBtn" class="action-btn utility-btn-green" type="button">同步</button>
+          <button id="launcherSkipBtn" class="action-btn" type="button">跳过异常 AI</button>
           <button id="launcherPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
         </div>
       </div>
@@ -50,6 +54,7 @@
         </div>
 
         <div class="title-actions">
+          <button id="panelRunModeBtn" class="ghost-btn" type="button">手动推进</button>
           <span id="draftStatusBadge" class="status-pill">待生成</span>
           <button id="collapseConsoleBtn" class="ghost-btn" type="button">收起</button>
         </div>
@@ -162,6 +167,36 @@
             <div id="participantTags" class="tag-row participant-tags-row"></div>
           </details>
 
+          <details class="support-disclosure participant-disclosure">
+            <summary class="disclosure-summary participant-summary">
+              <div class="support-summary-copy participant-summary-copy">
+                <span class="field-label">总结者</span>
+                <span id="summarizerSummaryText" class="field-hint participant-summary-text">默认自动推荐</span>
+              </div>
+              <span id="summarizerModeBadge" class="summary-meta">自动</span>
+            </summary>
+            <div class="support-body">
+              <div class="support-group support-group-primary">
+                <div class="support-group-header">
+                  <span id="summarizerHintText" class="field-hint">自动模式会优先使用你手动指定的总结者。</span>
+                  <button id="clearSummarizerBtn" class="tool-btn support-inline-btn" type="button">恢复自动</button>
+                </div>
+                <div id="summarizerTags" class="tag-row participant-tags-row"></div>
+              </div>
+            </div>
+          </details>
+
+          <details class="support-disclosure">
+            <summary class="disclosure-summary">
+              <div class="support-summary-copy">
+                <span class="field-label">轮次结果</span>
+                <span id="roundHistorySummaryText" class="field-hint">还没有已完成轮次</span>
+              </div>
+              <span id="roundHistoryCountBadge" class="summary-meta">0 轮</span>
+            </summary>
+            <div id="roundHistoryList" class="round-history-list"></div>
+          </details>
+
           <details id="draftSourcesPanel" class="support-disclosure">
             <summary id="draftSourcesBtn" class="disclosure-summary">
               <div class="support-summary-copy">
@@ -220,6 +255,7 @@
         <div class="footer-actions">
           <button id="panelPrivateBtn" class="tool-btn" type="button">临时对话</button>
           <button id="panelSyncBtn" class="tool-btn" type="button">同步</button>
+          <button id="panelSkipBtn" class="tool-btn" type="button">跳过异常 AI</button>
           <button id="panelPrimaryBtn" class="primary-action-btn" type="button">开始首轮</button>
         </div>
 

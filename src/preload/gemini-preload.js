@@ -5,16 +5,10 @@ const {
   findElement,
   findVisibleElement,
   isVisibleElement,
-  createSubmitHandler,
   delay,
   setupIPCListeners,
   setupInputScanner,
-  createUIControls,
-  setupViewInfoListener,
-  setupSupersizeListener,
-  setupLoadingOverlay,
   waitForCondition,
-  waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
@@ -34,16 +28,8 @@ const GEMINI_NAV_MENU_SELECTORS = [
   'button[title*="Menu"]',
 ];
 
-const GEMINI_UI_OPTIONS = {
-  topBarInset: {
-    observeDomMutations: false,
-    observeScroll: false,
-    delayedSyncDelays: [250, 1000, 2500],
-  },
-};
-
 let inputElement = null;
-let appendBaseText = null;
+let lastSubmittedText = '';
 
 function isGeminiHost() {
   return window.location.hostname === 'gemini.google.com'
@@ -275,36 +261,59 @@ function writeInputText(text) {
 }
 
 function resetAppendState() {
-  appendBaseText = null;
+  lastSubmittedText = '';
 }
 
 function injectText(text) {
-  const nextText = String(text || '');
-  const resolvedInput = resolveInputElement();
-
-  if (!resolvedInput) {
+  if (!resolveInputElement()) {
     ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
     return;
   }
 
-  if (nextText.length === 0) {
-    if (appendBaseText !== null) {
-      writeInputText(appendBaseText);
-      resetAppendState();
-    }
-    return;
-  }
-
-  if (appendBaseText === null) {
-    appendBaseText = readGeminiEditorText(resolvedInput);
-  }
-
-  writeInputText(`${appendBaseText}${nextText}`);
+  writeInputText(String(text || ''));
 }
 
 function injectSyncText(text) {
   resetAppendState();
   writeInputText(String(text || ''));
+}
+
+function dispatchGeminiEnterSubmit(element) {
+  if (!element) {
+    return false;
+  }
+
+  const eventOptions = {
+    key: 'Enter',
+    code: 'Enter',
+    keyCode: 13,
+    which: 13,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+  };
+
+  element.dispatchEvent(new KeyboardEvent('keydown', eventOptions));
+  element.dispatchEvent(new KeyboardEvent('keypress', eventOptions));
+  element.dispatchEvent(new KeyboardEvent('keyup', eventOptions));
+  return true;
+}
+
+function clearSubmittedTextIfStillPresent(expectedText) {
+  const normalizedExpected = normalizeGeminiText(expectedText);
+  if (!normalizedExpected) {
+    return;
+  }
+
+  [180, 700].forEach((delayMs) => {
+    window.setTimeout(() => {
+      const currentText = readGeminiEditorText(resolveInputElement());
+      if (normalizeGeminiText(currentText) === normalizedExpected) {
+        writeInputText('');
+      }
+    }, delayMs);
+  });
 }
 
 function clickGeminiButtonOnce(element) {
@@ -417,12 +426,25 @@ async function handlePrivateNewChat(payload) {
   });
 }
 
-const submitMessage = createSubmitHandler(
-  provider,
-  config,
-  () => inputElement,
-  null
-);
+function submitMessage() {
+  const resolvedInput = resolveInputElement();
+  if (!resolvedInput) {
+    ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
+    return;
+  }
+
+  lastSubmittedText = readGeminiEditorText(resolvedInput);
+  const submitElement = findVisibleElement(config.gemini?.submit, document);
+  const clicked = submitElement && !submitElement.disabled
+    ? clickGeminiButtonOnce(submitElement)
+    : false;
+
+  if (!clicked) {
+    dispatchGeminiEnterSubmit(resolvedInput);
+  }
+
+  clearSubmittedTextIfStillPresent(lastSubmittedText);
+}
 
 setupIPCListeners(provider, config, injectText, submitMessage, {
   onSyncText: injectSyncText,
@@ -438,18 +460,3 @@ setupInputScanner(
   (element) => { inputElement = element; },
   (selector) => findGeminiInput(findElement(selector))
 );
-
-const getViewInfo = setupViewInfoListener((viewInfo) => {
-  window.polygptGetViewInfo = () => viewInfo;
-  createUIControls(viewInfo, GEMINI_UI_OPTIONS);
-});
-
-setupSupersizeListener();
-setupLoadingOverlay();
-
-waitForDOM(() => {
-  const viewInfo = getViewInfo();
-  if (viewInfo) {
-    createUIControls(viewInfo, GEMINI_UI_OPTIONS);
-  }
-});

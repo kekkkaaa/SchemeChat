@@ -36,11 +36,11 @@ module.exports = createDomExtractor({
   minRootTextLength: 30,
   busyWait: {
     pollIntervalMs: 700,
-    timeoutMs: 30000,
+    timeoutMs: 45000,
   },
   stability: {
     pollIntervalMs: 700,
-    stablePassesRequired: 2,
-    timeoutMs: 12000,
+    stablePassesRequired: 4,
+    timeoutMs: 20000,
   },
 });

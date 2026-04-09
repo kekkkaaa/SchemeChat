@@ -18,9 +18,28 @@ module.exports = createDomExtractor({
     '.model-response-text',
     '.response-content',
   ],
+  errorSelectors: [
+    '[role="alert"]',
+    '[aria-live="assertive"]',
+    '[aria-live="polite"]',
+    'mat-snack-bar-container',
+    '.mat-mdc-snack-bar-container',
+    '[class*="snack"]',
+    '[class*="toast"]',
+  ],
+  errorTextPatterns: [
+    'something went wrong',
+    'went wrong',
+    'try again',
+    '发生问题',
+    '出了问题',
+    '出了点问题',
+    '请重试',
+    '重试',
+    '(13)',
+  ],
   busySelectors: [
     'button[aria-label*="Stop"]',
-    'button[aria-label*="停止"]',
     'button[aria-label*="Cancel"]',
     'button[mattooltip*="Stop"]',
     '[data-test-id*="stop"]',
@@ -29,7 +48,6 @@ module.exports = createDomExtractor({
     'stop generating',
     'stop response',
     'cancel',
-    '停止',
   ],
   noisePatterns: [
     'copy',
@@ -39,11 +57,11 @@ module.exports = createDomExtractor({
   minRootTextLength: 30,
   busyWait: {
     pollIntervalMs: 700,
-    timeoutMs: 30000,
+    timeoutMs: 45000,
   },
   stability: {
     pollIntervalMs: 700,
-    stablePassesRequired: 2,
-    timeoutMs: 12000,
+    stablePassesRequired: 4,
+    timeoutMs: 20000,
   },
 });

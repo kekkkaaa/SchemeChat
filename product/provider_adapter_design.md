@@ -25,6 +25,27 @@ The adapter layer must hide provider-specific DOM details from upper layers.
 
 ## Shared Design Principles
 
+### Principle 0: Provider compatibility should be centralized
+For embedded web providers, runtime compatibility drift is expected.
+
+Therefore, each provider should have a small compatibility profile that defines:
+- session partition
+- user-agent strategy
+- waiting / error heuristics when needed
+
+Current V1 policy:
+- ChatGPT: dedicated partition + Chrome-like UA + minimal page injection
+- Gemini: Chrome-like UA + minimal page injection
+- Other providers: keep standard profile unless a real compatibility issue is observed
+
+Maintenance note:
+- ChatGPT should prefer a dedicated persistent partition so its site state does not share pollution with other providers
+- when migrating from a shared partition, prefer copying auth cookies into the dedicated partition first
+- routine recovery should prefer clearing non-cookie site storage while preserving auth cookies where possible
+- hard reset that removes cookies should be treated as a last resort, not a normal user-facing action
+
+This keeps performance fixes out of business logic and avoids scattering provider-specific runtime patches across the app.
+
 ### Principle 1: Do not hardcode business logic into adapters
 Adapters should only know how to operate the website.
 

@@ -39,8 +39,12 @@ function runStructuredMessageInspection(spec) {
   const rootSelectors = Array.isArray(spec.rootSelectors) ? spec.rootSelectors : [];
   const contentSelectors = Array.isArray(spec.contentSelectors) ? spec.contentSelectors : [];
   const busySelectors = Array.isArray(spec.busySelectors) ? spec.busySelectors : [];
+  const errorSelectors = Array.isArray(spec.errorSelectors) ? spec.errorSelectors : [];
   const busyTextPatterns = Array.isArray(spec.busyTextPatterns)
     ? spec.busyTextPatterns.map((pattern) => String(pattern).toLowerCase())
+    : [];
+  const errorTextPatterns = Array.isArray(spec.errorTextPatterns)
+    ? spec.errorTextPatterns.map((pattern) => String(pattern).toLowerCase())
     : [];
   const excludeSelectors = Array.isArray(spec.excludeSelectors) ? spec.excludeSelectors : [];
   const anchorSelectors = Array.isArray(spec.anchorSelectors) ? spec.anchorSelectors : [];
@@ -353,6 +357,32 @@ function runStructuredMessageInspection(spec) {
     return busyBySelector || busyByText;
   }
 
+  function findErrorNotice() {
+    if (errorSelectors.length === 0 || errorTextPatterns.length === 0) {
+      return null;
+    }
+
+    const candidates = queryVisible(errorSelectors);
+    const matched = candidates.find((element) => {
+      const label = readElementLabel(element);
+      return errorTextPatterns.some((pattern) => label.includes(pattern));
+    });
+
+    if (!matched) {
+      return null;
+    }
+
+    const label = normalizeText(
+      matched.innerText
+      || matched.textContent
+      || matched.getAttribute('aria-label')
+      || matched.getAttribute('title')
+      || ''
+    );
+
+    return label || 'Provider page reported an error.';
+  }
+
   if (!hostMatches()) {
     return {
       ok: false,
@@ -370,18 +400,37 @@ function runStructuredMessageInspection(spec) {
 
   const candidates = collectRootCandidates();
   const selected = pickLatestCandidate(candidates);
+  const errorNotice = findErrorNotice();
   if (!selected || !selected.text) {
+    if (!errorNotice) {
+      return {
+        ok: true,
+        busy: isBusy(),
+        text: '',
+        confidence: 0,
+        sourceMethod: 'dom-pending',
+        diagnostics: {
+          candidateCount: candidates.length,
+          url: window.location.href,
+          title: document.title,
+          errorNotice: null,
+          pendingLatestReply: true,
+        },
+      };
+    }
+
     return {
       ok: false,
       busy: isBusy(),
       text: '',
       confidence: 0,
       sourceMethod: 'dom',
-      error: 'No latest assistant reply could be identified.',
+      error: errorNotice || 'No latest assistant reply could be identified.',
       diagnostics: {
         candidateCount: candidates.length,
         url: window.location.href,
         title: document.title,
+        errorNotice,
       },
     };
   }
@@ -389,6 +438,27 @@ function runStructuredMessageInspection(spec) {
   let confidence = Math.max(0, Math.min(selected.score, 1));
   if (selected.blockCount <= 1) {
     confidence = Math.max(0.35, confidence - 0.15);
+  }
+
+  if (errorNotice) {
+    return {
+      ok: false,
+      busy: false,
+      text: selected.text,
+      confidence,
+      sourceMethod: 'dom-error',
+      error: errorNotice,
+      diagnostics: {
+        candidateCount: candidates.length,
+        blockCount: selected.blockCount,
+        usedRootFallback: selected.usedRootFallback,
+        rootTextLength: selected.rootTextLength,
+        url: window.location.href,
+        title: document.title,
+        errorNotice,
+      },
+      fingerprint: selected.text,
+    };
   }
 
   return {

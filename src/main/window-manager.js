@@ -2,6 +2,7 @@ const { BaseWindow, BrowserWindow, WebContentsView, Menu, clipboard } = require(
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+const { getProviderCompatibility } = require('./provider-compatibility');
 
 const TOP_BAR_HEIGHT = 40;
 const CONTROL_SURFACE_MARGIN = 20;
@@ -21,7 +22,6 @@ const SETTINGS_WINDOW_MIN_HEIGHT = 520;
 const LAYOUT_CONFIG_PATH = path.join(__dirname, '../../config/window-layout.json');
 const LEGACY_PROVIDER_CONFIG_PATH = path.join(__dirname, '../../config/window-providers.json');
 const SETTINGS_WINDOW_CONFIG_PATH = path.join(__dirname, '../../config/settings-window.json');
-
 function safeConsoleWrite(method, ...args) {
   const stream = method === 'error' ? process.stderr : process.stdout;
   if (!stream || stream.destroyed || stream.writable === false) {
@@ -51,31 +51,26 @@ const PROVIDERS = {
     url: 'https://chat.openai.com',
     preload: 'chatgpt-preload.js',
     name: 'ChatGPT',
-    userAgent: null,
   },
   gemini: {
     url: 'https://gemini.google.com',
     preload: 'gemini-preload.js',
     name: 'Gemini',
-    userAgent: null,
   },
   perplexity: {
     url: 'https://www.perplexity.ai',
     preload: 'perplexity-preload.js',
     name: 'Perplexity',
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   },
   claude: {
     url: 'https://claude.ai',
     preload: 'claude-preload.js',
     name: 'Claude',
-    userAgent: null,
   },
   grok: {
     url: 'https://x.com/i/grok',
     preload: 'grok-preload.js',
     name: 'Grok',
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
   },
 };
 
@@ -527,6 +522,7 @@ function attachEditableContextMenu(webContents) {
 
 function createProviderView(providerKey, paneId) {
   const provider = PROVIDERS[providerKey];
+  const compatibility = getProviderCompatibility(providerKey);
   if (!provider) {
     throw new Error(`Unknown provider: ${providerKey}`);
   }
@@ -534,7 +530,7 @@ function createProviderView(providerKey, paneId) {
   safeLog(`[WindowManager] Creating view for ${providerKey} at ${paneId}. Preload: ${provider.preload}`);
 
   const webPreferences = {
-    partition: providerKey === 'grok' ? 'persist:grok' : 'persist:shared',
+    partition: compatibility.partition,
     nodeIntegration: false,
     contextIsolation: true,
     sandbox: false,
@@ -546,8 +542,8 @@ function createProviderView(providerKey, paneId) {
   }
 
   const view = new WebContentsView({ webPreferences });
-  if (provider.userAgent) {
-    view.webContents.setUserAgent(provider.userAgent);
+  if (compatibility.userAgent) {
+    view.webContents.setUserAgent(compatibility.userAgent);
   }
 
   view.providerKey = providerKey;

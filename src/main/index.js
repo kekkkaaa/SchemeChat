@@ -1,12 +1,33 @@
 const { app, ipcMain, session, Menu, globalShortcut } = require('electron');
+const fs = require('fs');
+const path = require('path');
 const { autoUpdater } = require('electron-updater');
-const { captureStableLatestReply } = require('./provider-sync');
-const { buildDiscussionPrompt } = require('./sync/prompt-builder');
+const {
+  buildRoundPrompt,
+  buildDiscussionPrompt,
+  captureStableLatestReply,
+  inspectProviderView,
+  syncPaneEntries,
+} = require('./sync');
 const windowManager = require('./window-manager');
+const { getProviderCompatibility } = require('./provider-compatibility');
 
 let mainWindow;
 let currentZoomFactor = 1.0;
 const pendingPrivateNewChatRequests = new Map();
+const SHARED_PARTITION = 'persist:shared';
+const CHATGPT_PARTITION = getProviderCompatibility('chatgpt').partition;
+const CHATGPT_SESSION_MAINTENANCE_VERSION = 3;
+const CHATGPT_COOKIE_DOMAINS = ['chatgpt.com', 'chat.openai.com'];
+const CHATGPT_SESSION_ORIGINS = ['https://chatgpt.com', 'https://chat.openai.com'];
+const CHATGPT_SESSION_STORAGES = [
+  'localstorage',
+  'indexdb',
+  'serviceworkers',
+  'cachestorage',
+  'filesystem',
+  'websql',
+];
 
 [process.stdout, process.stderr].forEach((stream) => {
   if (!stream) {
@@ -20,6 +41,161 @@ const pendingPrivateNewChatRequests = new Map();
     throw error;
   });
 });
+
+function getChatGptSessionMarkerPath() {
+  return path.join(app.getPath('userData'), 'chatgpt-session-reset.json');
+}
+
+function readChatGptSessionMarker() {
+  const markerPath = getChatGptSessionMarkerPath();
+  if (!fs.existsSync(markerPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  } catch (error) {
+    console.error('Failed to read ChatGPT session marker:', error);
+    return null;
+  }
+}
+
+function writeChatGptSessionMarker(payload) {
+  const markerPath = getChatGptSessionMarkerPath();
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.error('Failed to write ChatGPT session marker:', error);
+  }
+}
+
+function createCookieUrl(cookie) {
+  const domain = String(cookie?.domain || '').replace(/^\./, '');
+  const scheme = cookie?.secure ? 'https' : 'http';
+  return `${scheme}://${domain}${cookie?.path || '/'}`;
+}
+
+async function getChatGptCookies(targetSession) {
+  const cookies = await targetSession.cookies.get({});
+  return cookies.filter((cookie) => {
+    const domain = String(cookie?.domain || '').replace(/^\./, '');
+    return CHATGPT_COOKIE_DOMAINS.includes(domain);
+  });
+}
+
+async function copyChatGptCookies(sourceSession, targetSession) {
+  const sourceCookies = await getChatGptCookies(sourceSession);
+  await Promise.all(
+    sourceCookies.map((cookie) => {
+      const payload = {
+        url: createCookieUrl(cookie),
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        secure: cookie.secure,
+        httpOnly: cookie.httpOnly,
+      };
+
+      if (typeof cookie.expirationDate === 'number') {
+        payload.expirationDate = cookie.expirationDate;
+      }
+      if (cookie.sameSite && cookie.sameSite !== 'unspecified') {
+        payload.sameSite = cookie.sameSite;
+      }
+
+      return targetSession.cookies.set(payload).catch(() => null);
+    })
+  );
+}
+
+async function clearChatGptSessionData(targetSession, storages = CHATGPT_SESSION_STORAGES) {
+  for (const origin of CHATGPT_SESSION_ORIGINS) {
+    await targetSession.clearStorageData({
+      origin,
+      storages,
+    });
+  }
+}
+
+async function performChatGptSoftMaintenance(targetSession, options = {}) {
+  const storages = Array.isArray(options.storages) && options.storages.length > 0
+    ? [...new Set(options.storages.filter(Boolean))]
+    : CHATGPT_SESSION_STORAGES;
+
+  await clearChatGptSessionData(targetSession, storages);
+
+  if (options.clearCache !== false && typeof targetSession.clearCache === 'function') {
+    await targetSession.clearCache();
+  }
+}
+
+async function ensureDedicatedChatGptSessionState() {
+  const marker = readChatGptSessionMarker() || {};
+
+  const sharedSession = session.fromPartition(SHARED_PARTITION);
+  const chatGptSession = session.fromPartition(CHATGPT_PARTITION);
+  const targetCookies = await getChatGptCookies(chatGptSession);
+
+  if ((marker?.version || 0) < CHATGPT_SESSION_MAINTENANCE_VERSION && targetCookies.length === 0) {
+    await copyChatGptCookies(sharedSession, chatGptSession);
+  }
+
+  await performChatGptSoftMaintenance(chatGptSession, {
+    storages: CHATGPT_SESSION_STORAGES,
+    clearCache: true,
+  });
+
+  writeChatGptSessionMarker({
+    ...marker,
+    version: CHATGPT_SESSION_MAINTENANCE_VERSION,
+    maintainedAt: new Date().toISOString(),
+    partition: CHATGPT_PARTITION,
+    preservedCookies: true,
+  });
+
+  return true;
+}
+
+async function reloadPaneEntries(paneEntries) {
+  const targets = Array.isArray(paneEntries) ? paneEntries.filter(Boolean) : [];
+
+  await Promise.all(
+    targets.map((paneEntry) => {
+      return new Promise((resolve) => {
+        const view = paneEntry?.view;
+        if (!view?.webContents) {
+          resolve();
+          return;
+        }
+
+        let settled = false;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeoutId);
+          view.webContents.removeListener('did-finish-load', onLoad);
+          resolve();
+        };
+
+        const onLoad = () => {
+          view.webContents.setZoomFactor(currentZoomFactor);
+          finish();
+        };
+
+        const timeoutId = setTimeout(() => {
+          finish();
+        }, 10000);
+
+        view.webContents.on('did-finish-load', onLoad);
+        view.webContents.reload();
+      });
+    })
+  );
+}
 
 function hideNativeAppMenu(targetWindow) {
   Menu.setApplicationMenu(null);
@@ -41,6 +217,24 @@ function hideNativeAppMenu(targetWindow) {
   }
 }
 
+function configureTrustedPartition(partitionName) {
+  const targetSession = session.fromPartition(partitionName);
+  targetSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media' || permission === 'clipboard-read' || permission === 'clipboard-write' || permission === 'clipboard-sanitized-write') {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+
+  targetSession.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === 'media' || permission === 'clipboard-read' || permission === 'clipboard-write' || permission === 'clipboard-sanitized-write') {
+      return true;
+    }
+    return false;
+  });
+}
+
 function getViewProviderDisplayName(view) {
   return windowManager.PROVIDERS[view?.providerKey]?.name || view?.providerKey || 'Unknown Provider';
 }
@@ -55,6 +249,52 @@ function getProviderDisplayName(providerKey) {
 
 function getPaneLabel(paneEntry) {
   return `${getProviderDisplayName(paneEntry?.view?.providerKey)} (${paneEntry?.id || 'pane'})`;
+}
+
+function getTargetPaneEntries(paneIds) {
+  const paneEntries = getPaneEntries();
+  if (!Array.isArray(paneIds) || paneIds.length === 0) {
+    return paneEntries;
+  }
+
+  const paneIdSet = new Set(
+    paneIds
+      .map((paneId) => String(paneId || '').trim())
+      .filter(Boolean)
+  );
+
+  return paneEntries.filter((paneEntry) => paneIdSet.has(paneEntry.id));
+}
+
+function sendChannelToPaneEntries(paneEntries, channel, payload) {
+  paneEntries.forEach((paneEntry) => {
+    if (!paneEntry?.view?.webContents) {
+      return;
+    }
+
+    paneEntry.view.webContents.send(channel, payload);
+  });
+}
+
+function buildInspectionPayload(paneEntry, inspectionResult) {
+  const latestReplyText = inspectionResult?.latestReplyText || inspectionResult?.text || '';
+  return {
+    paneId: paneEntry.id,
+    providerKey: paneEntry?.view?.providerKey || paneEntry?.providerKey || '',
+    providerName: getPaneLabel(paneEntry),
+    ok: Boolean(inspectionResult?.ok),
+    busy: Boolean(inspectionResult?.busy),
+    latestReplyText,
+    hasReply: Boolean(latestReplyText),
+    error: inspectionResult?.error || null,
+    status: !inspectionResult?.ok
+      ? 'failed'
+      : inspectionResult?.busy
+        ? 'waiting'
+        : latestReplyText
+          ? 'completed'
+          : 'idle',
+  };
 }
 
 function buildPrivateNewChatResponse(paneEntries, receivedResults) {
@@ -102,21 +342,14 @@ function buildPrivateNewChatResponse(paneEntries, receivedResults) {
 }
 
 app.on('ready', async () => {
-  // Handle permissions for media (microphone)
-  session.fromPartition('persist:shared').setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'clipboard-read' || permission === 'clipboard-write' || permission === 'clipboard-sanitized-write') {
-      callback(true);
-    } else {
-      callback(false);
-    }
-  });
+  configureTrustedPartition(SHARED_PARTITION);
+  configureTrustedPartition(CHATGPT_PARTITION);
 
-  session.fromPartition('persist:shared').setPermissionCheckHandler((webContents, permission, origin) => {
-    if (permission === 'media' || permission === 'clipboard-read' || permission === 'clipboard-write' || permission === 'clipboard-sanitized-write') {
-      return true;
-    }
-    return false;
-  });
+  try {
+    await ensureDedicatedChatGptSessionState();
+  } catch (error) {
+    console.error('Failed to prepare dedicated ChatGPT session:', error);
+  }
 
   hideNativeAppMenu();
 
@@ -307,24 +540,125 @@ app.on('ready', async () => {
     };
   });
 
-  ipcMain.handle('refresh-pages', async (event) => {
-    const reloadPromises = getPaneEntries().map((paneEntry) => {
-      return new Promise((resolve) => {
-        const view = paneEntry.view;
-        if (view && view.webContents) {
-          const onLoad = () => {
-            view.webContents.setZoomFactor(currentZoomFactor);
-            view.webContents.removeListener('did-finish-load', onLoad);
-            resolve();
-          };
-          view.webContents.on('did-finish-load', onLoad);
-          view.webContents.reload();
-        } else {
-          resolve();
-        }
+  ipcMain.handle('sync-all-latest-rounds', async () => {
+    return syncPaneEntries(getPaneEntries());
+  });
+
+  ipcMain.handle('inspect-provider-round-statuses', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+        results: [],
+      };
+    }
+
+    const results = await Promise.all(
+      paneEntries.map(async (paneEntry) => {
+        const inspectionResult = await inspectProviderView(paneEntry.view);
+        return buildInspectionPayload(paneEntry, inspectionResult);
+      })
+    );
+
+    return {
+      ok: results.every((result) => result.ok),
+      results,
+    };
+  });
+
+  ipcMain.handle('capture-provider-round-results', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+        results: [],
+      };
+    }
+
+    const results = await Promise.all(
+      paneEntries.map(async (paneEntry) => {
+        const captureResult = await captureStableLatestReply(paneEntry.view);
+        return buildInspectionPayload(paneEntry, captureResult);
+      })
+    );
+
+    return {
+      ok: results.every((result) => result.ok),
+      results,
+    };
+  });
+
+  ipcMain.handle('prepare-generated-round', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+        prompts: [],
+      };
+    }
+
+    const promptType = String(payload?.promptType || '').trim();
+    if (!promptType) {
+      return {
+        ok: false,
+        message: 'Prompt type is required.',
+        prompts: [],
+      };
+    }
+
+    const sourceEntries = Array.isArray(payload?.sources)
+      ? payload.sources
+      : [];
+
+    const prompts = paneEntries.map((paneEntry) => {
+      const scopedSources = sourceEntries.filter((source) => {
+        return payload?.includeSelf ? true : source?.paneId !== paneEntry.id;
       });
+
+      const prompt = buildRoundPrompt(promptType, scopedSources, {
+        topic: payload?.topic || '',
+        summarizerName: payload?.summarizerName || getPaneLabel(paneEntry),
+        maxLengthPerSource: payload?.maxLengthPerSource,
+      });
+
+      return {
+        paneEntry,
+        paneId: paneEntry.id,
+        providerName: getPaneLabel(paneEntry),
+        prompt,
+      };
     });
-    await Promise.all(reloadPromises);
+
+    const invalidPrompt = prompts.find((entry) => !entry.prompt);
+    if (invalidPrompt) {
+      return {
+        ok: false,
+        message: `${invalidPrompt.providerName} has no prompt to inject for ${promptType}.`,
+        prompts: [],
+      };
+    }
+
+    prompts.forEach((entry) => {
+      entry.paneEntry.view.webContents.send('inject-sync-text', entry.prompt);
+    });
+
+    return {
+      ok: true,
+      message: `Prepared ${promptType} for ${prompts.length} pane${prompts.length > 1 ? 's' : ''}.`,
+      prompts: prompts.map((entry) => ({
+        paneId: entry.paneId,
+        providerName: entry.providerName,
+        prompt: entry.prompt,
+      })),
+      previewPrompt: prompts[0]?.prompt || '',
+    };
+  });
+
+  ipcMain.handle('refresh-pages', async (event) => {
+    await reloadPaneEntries(getPaneEntries());
     return true;
   });
 
@@ -348,6 +682,22 @@ app.on('ready', async () => {
       });
     }
     return true;
+  });
+
+  ipcMain.handle('submit-message-to-panes', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+      };
+    }
+
+    sendChannelToPaneEntries(paneEntries, 'submit-message');
+    return {
+      ok: true,
+      message: `Submitted messages to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+    };
   });
 
   // Handle new chat request
