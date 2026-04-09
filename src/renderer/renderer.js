@@ -74,6 +74,20 @@ const QUICK_PROMPT_OPTIONS = [
   },
 ];
 
+const STICKY_RULE_SUMMARIES = {
+  compressed: '高压缩',
+  focus: '先结论后理由',
+  independent: '独立判断，不迎合',
+  numbered: '用 1/2/3',
+  relay: '便于其他 AI 转述',
+};
+
+const QUICK_PROMPT_SUMMARIES = {
+  cost: '优先看成本、复杂度、落地代价',
+  risk: '明确风险边界、不成立条件和副作用',
+  stance: '直接表态，不要只给模糊分析',
+};
+
 const DEFAULT_STICKY_RULE_IDS = STICKY_RULE_OPTIONS.map((option) => option.id);
 
 const state = {
@@ -205,6 +219,12 @@ function summarizeText(text, maxLength = 54) {
   return `${value.slice(0, maxLength)}...`;
 }
 
+function summarizeOptionPrompts(options, summaryMap) {
+  return options
+    .map((option) => summaryMap[option.id] || option.prompt)
+    .filter(Boolean);
+}
+
 function createStaticChip(label, className = '') {
   const element = document.createElement('button');
   element.type = 'button';
@@ -281,44 +301,28 @@ function markDraftStale(message) {
 function buildRoundOneDraft() {
   const stickyRules = getStickyRuleOptions();
   const quickPrompts = getQuickPromptOptions();
-  const temporaryLines = [];
-
-  quickPrompts.forEach((option) => {
-    temporaryLines.push(option.prompt);
-  });
+  const requirementParts = summarizeOptionPrompts(stickyRules, STICKY_RULE_SUMMARIES);
+  const temporaryLines = summarizeOptionPrompts(quickPrompts, QUICK_PROMPT_SUMMARIES);
 
   if (state.roundNote.trim()) {
     temporaryLines.push(state.roundNote.trim());
   }
 
   const lines = [
-    '请围绕下面的问题进行第 1 轮独立分析。',
-    '这是一场多 AI 讨论的首轮，你现在不需要回应其他 AI，只需要先给出你自己的判断。',
-    '请高压缩输出，只保留真正影响判断的信息，避免铺垫、套话和重复。',
-    '',
-    '问题：',
-    state.topic.trim(),
-    '',
-    '本轮目标：',
-    '1. 先直接给出你的核心结论。',
-    '2. 再列出最关键的依据、方案或判断路径。',
-    '3. 明确主要风险、限制条件，或你最不确定的一点。',
-    '',
-    '输出要求：',
+    '第 1 轮独立分析，不回应其他 AI。',
+    `题目：${state.topic.trim()}`,
+    '请用 1/2/3 输出：1. 核心结论 2. 关键依据或判断路径 3. 主要不足、风险或最不确定的一点。',
   ];
 
-  stickyRules.forEach((rule, index) => {
-    lines.push(`${index + 1}. ${rule.prompt}`);
-  });
-
-  if (temporaryLines.length > 0) {
-    lines.push('', '本轮临时补充：');
-    temporaryLines.forEach((line, index) => {
-      lines.push(`${index + 1}. ${line}`);
-    });
+  if (requirementParts.length > 0) {
+    lines.push(`要求：${requirementParts.join('；')}。`);
   }
 
-  lines.push('', '请直接开始，不要寒暄，不要重复题面。');
+  if (temporaryLines.length > 0) {
+    lines.push(`补充：${temporaryLines.join('；')}`);
+  }
+
+  lines.push('直接开始，不寒暄，不复述题目。');
   return lines.join('\n');
 }
 

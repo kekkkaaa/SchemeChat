@@ -1,6 +1,7 @@
 const { app, ipcMain, session, Menu, globalShortcut } = require('electron');
 const { autoUpdater } = require('electron-updater');
-const { buildDiscussionPrompt, captureStableLatestReply } = require('./provider-sync');
+const { captureStableLatestReply } = require('./provider-sync');
+const { buildDiscussionPrompt } = require('./sync/prompt-builder');
 const windowManager = require('./window-manager');
 
 let mainWindow;
