@@ -13,6 +13,39 @@ The objective is to get a real working chain instead of overdesigning the full p
 
 ---
 
+## Current Status Update (2026-04-10)
+
+The current implementation has moved beyond the original MVP scope in a few important ways.
+
+Current accepted baseline:
+
+- ChatGPT, Gemini, and Grok can participate in the discussion console as providers.
+- Auto-run is the default run mode in the workbench.
+- `2 AI` and `3 AI` discussion flows can auto-progress through the configured round plan.
+- Final summarizer policy is now:
+  - manual workbench selection first
+  - otherwise provider-priority fallback
+  - default does **not** use AI voting
+- Round 1 still sends only the user topic / first-round draft.
+- Generated follow-up rounds are assembled per pane at send time instead of mirroring one shared final prompt to every pane.
+- Follow-up rounds should exclude self-source and only attach the other participating AIs' previous-round replies.
+
+Current implementation source-of-truth for this baseline:
+
+- `src/renderer/discussion-core.js`
+- `src/renderer/renderer.js`
+- `src/main/index.js`
+- `src/main/sync/prompt-builder.js`
+- `product/discussion_multi_agent_acceptance_snapshot_2026-04-10.md`
+
+Important note:
+
+- some older sections below still describe the earlier `2-provider relay MVP` target
+- they should now be read as historical build order, not the current functional ceiling
+- the acceptance snapshot above is the better reference for what is actually shipped today
+
+---
+
 ## Stage 1 — Build ChatGPT Adapter
 
 ### Goal
