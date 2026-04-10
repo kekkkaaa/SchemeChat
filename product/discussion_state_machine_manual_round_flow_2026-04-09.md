@@ -42,18 +42,19 @@ After the final-summary round completes, both manual mode and auto mode now tran
 
 ## Draft Assembly Behavior
 
-For manual later rounds, the renderer now uses one editable shared draft and mirrors it only to the current target panes.
+For manual later rounds, the renderer now keeps one editable shared scaffold in the console and delays source assembly until send time.
 
 This is different from auto mode:
 
-- manual mode: shared editable draft, targeted send
+- manual mode: shared editable scaffold, then per-pane prompt assembly at send time
 - auto mode: per-pane generated prompt, then direct submit
 
-The manual shared draft keeps the user-editable workflow intact while still respecting:
+The manual shared scaffold keeps the user-editable workflow intact while also enforcing:
 
 - speaking panes
 - silent panes
 - summarizer-only final round
+- self-exclusion for later rounds
 
 ## Error Handling
 
@@ -73,5 +74,8 @@ New IPC handlers were added to support the updated flow:
 
 They are used by the renderer to:
 
-- mirror an editable draft only into the target panes
-- build a shared later-round draft without directly injecting per-pane variants
+- mirror only the round-one draft into target panes
+- build a shared later-round scaffold without directly injecting per-pane variants
+
+`prepare-generated-round` now also supports rebuilding the final per-pane prompt from that shared scaffold at send time.
+During this step, every later-round pane only receives other AIs' latest previous-round replies; the current pane's own previous reply is always excluded.

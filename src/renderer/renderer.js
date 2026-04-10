@@ -21,7 +21,6 @@ const {
   getModeOption: getModeOptionFromCore,
   getRoundGoalLabel: getRoundGoalLabelFromCore,
   getRoundTypeLabel: getRoundTypeLabelFromCore,
-  shouldIncludeSelfSourcesForPrompt,
 } = require('./discussion-core');
 const {
   buildFallbackRoundResultsFromTracks: buildFallbackRoundResultsFromAutoRun,
@@ -546,7 +545,15 @@ function getScopePaneIds() {
   return getUniquePaneIds(state.expectedPaneIds);
 }
 
+function shouldMirrorDraftLive() {
+  return state.draftPromptType === 'round-one';
+}
+
 function mirrorDraftToTargetPanes() {
+  if (!shouldMirrorDraftLive()) {
+    return;
+  }
+
   const paneIds = getDraftPaneIds();
   if (paneIds.length === 0) {
     return;
@@ -556,12 +563,22 @@ function mirrorDraftToTargetPanes() {
 }
 
 async function mirrorDraftToTargetPanesNow() {
-  const paneIds = getDraftPaneIds();
-  if (paneIds.length === 0) {
-    return;
+  if (!shouldMirrorDraftLive()) {
+    return {
+      ok: true,
+      message: 'Live mirror skipped for scaffold-only draft.',
+    };
   }
 
-  await ipcRenderer.invoke('send-text-update-to-panes', {
+  const paneIds = getDraftPaneIds();
+  if (paneIds.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+    };
+  }
+
+  return ipcRenderer.invoke('send-text-update-to-panes', {
     paneIds,
     text: state.draft,
   });
@@ -784,8 +801,8 @@ function renderSummarizerSelector() {
   refs.summarizerHintText.textContent = manualSelected
     ? '最终总结轮会优先使用你手动指定的总结者。'
     : currentSummarizerId
-      ? '当前按确认轮推荐优先、默认策略兜底自动推荐；你也可以提前手动指定。'
-      : '当前未形成明确自动推荐，请手动指定后再进入最终总结。';
+      ? '当前默认按系统优先级自动选择总结者；你也可以提前在工作台里手动指定。'
+      : '当前未找到可用总结者，请先在工作台里手动指定后再进入最终总结。';
   refs.clearSummarizerBtn.disabled = !manualSelected;
 
   panes.forEach((pane) => {
@@ -1585,8 +1602,12 @@ async function finishDiscussion(options = {}) {
 async function prepareGeneratedRoundDraft(options = {}) {
   const paneIds = getUniquePaneIds(options.paneIds);
   const promptType = String(options.promptType || '').trim();
-  const roundSources = getAutoRoundSources(promptType);
+  const autoRoundSources = getAutoRoundSources(promptType);
+  const roundSources = Array.isArray(autoRoundSources)
+    ? autoRoundSources
+    : [];
   const maxLengthPerSource = options.maxLengthPerSource || getAutoRoundSourceMaxLength(promptType);
+  const scaffoldSourceCount = Math.max(0, roundSources.length - 1);
 
   if (paneIds.length === 0) {
     enterGlobalErrorState(`第 ${options.roundNumber} 轮缺少可发言的目标面板。`, {
@@ -1622,7 +1643,8 @@ async function prepareGeneratedRoundDraft(options = {}) {
   try {
     draftResult = await ipcRenderer.invoke('build-generated-round-draft', {
       promptType,
-      sources: roundSources,
+      scaffoldOnly: true,
+      sourceCount: scaffoldSourceCount,
       topic: state.topic,
       summarizerName: state.summarizerProviderName,
       maxLengthPerSource,
@@ -1650,7 +1672,7 @@ async function prepareGeneratedRoundDraft(options = {}) {
   mirrorDraftToTargetPanes();
   focusPrimaryField();
   setFeedback(`已生成第 ${options.roundNumber} 轮 Draft，可发送`, {
-    meta: `将发送给 ${paneIds.length} 个发言 AI；发送前仍可继续编辑。`,
+    meta: `将发送给 ${paneIds.length} 个发言 AI；发送时会自动附上其他 AI 上一轮回复，不会回灌自己的内容。`,
   });
 }
 
@@ -1767,8 +1789,10 @@ async function prepareAndSubmitAutoRound(options = {}) {
   const paneIds = Array.isArray(options.paneIds)
     ? [...new Set(options.paneIds.filter(Boolean))]
     : [];
-  const roundSources = getAutoRoundSources(options.promptType);
-  const includeSelf = shouldIncludeSelfSourcesForPrompt(options.promptType);
+  const autoRoundSources = getAutoRoundSources(options.promptType);
+  const roundSources = Array.isArray(autoRoundSources)
+    ? autoRoundSources
+    : [];
   const maxLengthPerSource = options.maxLengthPerSource || getAutoRoundSourceMaxLength(options.promptType);
 
   state.currentRoundNumber = options.roundNumber;
@@ -1803,7 +1827,6 @@ async function prepareAndSubmitAutoRound(options = {}) {
       promptType: options.promptType,
       paneIds,
       sources: roundSources,
-      includeSelf,
       topic: state.topic,
       summarizerName: state.summarizerProviderName,
       maxLengthPerSource,
@@ -2424,7 +2447,29 @@ async function submitCurrentDraft(options = {}) {
 
   let submitResult;
   try {
-    await mirrorDraftToTargetPanesNow();
+    if (state.draftPromptType && state.draftPromptType !== 'round-one') {
+      const nextRoundSources = getAutoRoundSources(state.draftPromptType);
+      const roundSources = Array.isArray(nextRoundSources)
+        ? nextRoundSources
+        : [];
+      const maxLengthPerSource = getAutoRoundSourceMaxLength(state.draftPromptType);
+      const prepareResult = await ipcRenderer.invoke('prepare-generated-round', {
+        promptType: state.draftPromptType,
+        paneIds,
+        sources: roundSources,
+        baseDraft: state.draft,
+        topic: state.topic,
+        summarizerName: state.summarizerProviderName,
+        maxLengthPerSource,
+      });
+
+      if (!prepareResult?.ok) {
+        throw new Error(prepareResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
+      }
+    } else {
+      await mirrorDraftToTargetPanesNow();
+    }
+
     submitResult = await ipcRenderer.invoke('submit-message-to-panes', { paneIds });
   } catch (error) {
     console.error('Failed to submit current draft:', error);
@@ -2757,7 +2802,7 @@ refs.clearSummarizerBtn.addEventListener('click', () => {
   clearManualSummarizer();
   render();
   setFeedback('已恢复自动推荐总结者。', {
-    meta: '最终总结轮会按默认策略自动选择总结者，你仍可以随时再手动改选。',
+    meta: '最终总结轮会按默认优先级自动选择总结者，你仍可以随时在工作台里再手动改选。',
   });
 });
 

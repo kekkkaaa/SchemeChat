@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 const {
+  buildRoundPromptFromDraft,
+  buildRoundPromptScaffold,
   buildRoundPrompt,
   buildDiscussionPrompt,
   captureStableLatestReply,
@@ -631,14 +633,17 @@ app.on('ready', async () => {
 
     const prompts = paneEntries.map((paneEntry) => {
       const scopedSources = sourceEntries.filter((source) => {
-        return payload?.includeSelf ? true : source?.paneId !== paneEntry.id;
+        return Boolean(source?.paneId) && source.paneId !== paneEntry.id;
       });
 
-      const prompt = buildRoundPrompt(promptType, scopedSources, {
+      const promptOptions = {
         topic: payload?.topic || '',
         summarizerName: payload?.summarizerName || getPaneLabel(paneEntry),
         maxLengthPerSource: payload?.maxLengthPerSource,
-      });
+      };
+      const prompt = String(payload?.baseDraft || '').trim()
+        ? buildRoundPromptFromDraft(promptType, payload.baseDraft, scopedSources, promptOptions)
+        : buildRoundPrompt(promptType, scopedSources, promptOptions);
 
       return {
         paneEntry,
@@ -687,11 +692,15 @@ app.on('ready', async () => {
       ? payload.sources
       : [];
 
-    const prompt = buildRoundPrompt(promptType, sourceEntries, {
+    const promptOptions = {
       topic: payload?.topic || '',
       summarizerName: payload?.summarizerName || '',
+      sourceCount: Number.isFinite(payload?.sourceCount) ? payload.sourceCount : sourceEntries.length,
       maxLengthPerSource: payload?.maxLengthPerSource,
-    });
+    };
+    const prompt = payload?.scaffoldOnly
+      ? buildRoundPromptScaffold(promptType, promptOptions)
+      : buildRoundPrompt(promptType, sourceEntries, promptOptions);
 
     if (!prompt) {
       return {
@@ -703,7 +712,9 @@ app.on('ready', async () => {
 
     return {
       ok: true,
-      message: `Built shared draft for ${promptType}.`,
+      message: payload?.scaffoldOnly
+        ? `Built draft scaffold for ${promptType}.`
+        : `Built shared draft for ${promptType}.`,
       prompt,
     };
   });

@@ -114,14 +114,6 @@ const SUMMARIZER_PROVIDER_PRIORITY = {
   grok: 1,
 };
 
-const SUMMARIZER_PROVIDER_ALIASES = {
-  chatgpt: ['chatgpt', 'gpt'],
-  claude: ['claude'],
-  gemini: ['gemini'],
-  perplexity: ['perplexity'],
-  grok: ['grok'],
-};
-
 function normalizeTextBlock(text) {
   return String(text || '')
     .replace(/\u200B/g, '')
@@ -163,133 +155,21 @@ function chooseAutoSummarizerPaneId(results, panes, priorityMap) {
   const paneFallbackId = Array.isArray(panes) ? panes[0]?.id || '' : '';
 
   if (normalizedResults.length === 0) {
-    return paneFallbackId;
+    const paneResults = (Array.isArray(panes) ? panes : [])
+      .filter((pane) => pane?.id)
+      .map((pane) => ({
+        paneId: pane.id,
+        providerKey: pane.providerKey || '',
+      }));
+
+    return getProviderPriorityFallbackPaneId(paneResults, priorityMap, paneFallbackId);
   }
 
   if (normalizedResults.length === 1) {
     return normalizedResults[0]?.paneId || paneFallbackId;
   }
 
-  const normalizedPanes = Array.isArray(panes) ? panes.filter((pane) => pane?.id) : [];
-  const validVotes = normalizedResults
-    .map((result) => extractSummarizerVotePaneId(result?.latestReplyText || '', normalizedPanes))
-    .filter(Boolean);
-
-  if (normalizedResults.length === 2) {
-    if (validVotes.length === 0) {
-      return getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
-    }
-
-    return new Set(validVotes).size === 1 && validVotes.length === 2
-      ? validVotes[0]
-      : getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
-  }
-
-  if (validVotes.length > 0) {
-    const voteCounts = validVotes.reduce((counts, paneId) => {
-      counts.set(paneId, (counts.get(paneId) || 0) + 1);
-      return counts;
-    }, new Map());
-    const sortedVotes = [...voteCounts.entries()].sort((left, right) => {
-      if (left[1] !== right[1]) {
-        return right[1] - left[1];
-      }
-
-      return String(left[0]).localeCompare(String(right[0]));
-    });
-
-    const [topVote, secondVote] = sortedVotes;
-    if (topVote && (!secondVote || topVote[1] > secondVote[1])) {
-      return topVote[0];
-    }
-
-    return '';
-  }
-
   return getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
-}
-
-function normalizeSummarizerVoteText(text) {
-  return String(text || '')
-    .toLowerCase()
-    .replace(/\r/g, '')
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, ' ')
-    .trim();
-}
-
-function extractVoteCandidateSegments(text) {
-  const rawText = String(text || '');
-  if (!rawText.trim()) {
-    return [];
-  }
-
-  const keywordPatterns = [
-    '总结者',
-    '总结',
-    '推荐',
-    '建议',
-    '负责总结',
-    '做最终总结',
-    '最终总结',
-    'summarizer',
-    'summary',
-  ];
-
-  return rawText
-    .split(/\r?\n|。|！|!|？|\?|；|;/)
-    .map((segment) => normalizeSummarizerVoteText(segment))
-    .filter(Boolean)
-    .filter((segment) => keywordPatterns.some((pattern) => segment.includes(pattern)));
-}
-
-function getPaneVoteAliases(pane) {
-  const providerKey = String(pane?.providerKey || '').trim().toLowerCase();
-  const providerName = normalizeSummarizerVoteText(pane?.providerName || '');
-  const providerAliases = providerKey ? (SUMMARIZER_PROVIDER_ALIASES[providerKey] || [providerKey]) : [];
-
-  return [...new Set([
-    providerName,
-    ...providerAliases.map((alias) => normalizeSummarizerVoteText(alias)),
-  ].filter(Boolean))];
-}
-
-function extractSummarizerVotePaneId(text, panes) {
-  const candidateSegments = extractVoteCandidateSegments(text);
-  if (candidateSegments.length === 0) {
-    return '';
-  }
-
-  for (const segment of candidateSegments) {
-    const matches = (Array.isArray(panes) ? panes : [])
-      .map((pane) => {
-        const indexes = getPaneVoteAliases(pane)
-          .map((alias) => segment.indexOf(alias))
-          .filter((index) => index >= 0);
-
-        if (indexes.length === 0) {
-          return null;
-        }
-
-        return {
-          paneId: pane.id,
-          firstIndex: Math.min(...indexes),
-        };
-      })
-      .filter(Boolean)
-      .sort((left, right) => left.firstIndex - right.firstIndex);
-
-    if (matches.length === 0) {
-      continue;
-    }
-
-    if (matches.length > 1 && matches[0].firstIndex === matches[1].firstIndex) {
-      continue;
-    }
-
-    return matches[0]?.paneId || '';
-  }
-
-  return '';
 }
 
 function getProviderPriorityFallbackPaneId(results, priorityMap, paneFallbackId) {
@@ -755,10 +635,6 @@ function buildCumulativeRoundMaterialSources(config) {
   return buildLatestRoundMaterialSources(config);
 }
 
-function shouldIncludeSelfSourcesForPrompt(promptType) {
-  return ['compression', 'revision', 'confirmation', 'final-summary'].includes(promptType);
-}
-
 function getAutoPromptType(roundNumber, modeId) {
   if (modeId === 'fast-3') {
     if (roundNumber === 2) {
@@ -831,5 +707,4 @@ module.exports = {
   getModeOption,
   getRoundGoalLabel,
   getRoundTypeLabel,
-  shouldIncludeSelfSourcesForPrompt,
 };

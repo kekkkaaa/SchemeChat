@@ -47,6 +47,20 @@
 - 确认轮强调基于材料包做最后检查
 - 最终总结轮强调吸收材料包与必要引用输出最终方案
 
+### 5. Source Scope Rule
+
+中后轮 source 装配现在统一遵守一条 pane 级规则：
+
+- 每个 AI 只接收其他 AI 上一轮的最新回复
+- 当前 AI 自己上一轮的回复必须排除，不再回灌给自己
+- 2 AI 场景下，每个 AI 只会拿到对方 1 条来源
+- 3 AI 及以上场景下，每个 AI 会聚合其他相关 pane 的最新回复
+
+这条规则同时适用于：
+
+- 手动模式：控制台先编辑共享 scaffold，真正发送时再按 pane 追加过滤后的 source
+- 自动模式：直接按 pane 生成最终 Prompt，但同样排除 self source
+
 ## 代码位置
 
 - `src/renderer/discussion-core.js`

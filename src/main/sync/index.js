@@ -1,4 +1,6 @@
 const {
+  buildRoundPromptFromDraft,
+  buildRoundPromptScaffold,
   buildAggregatedDiscussionPrompt,
   buildCompressionPrompt,
   buildConfirmationPrompt,
@@ -41,6 +43,8 @@ async function captureStableLatestReply(view) {
 }
 
 module.exports = {
+  buildRoundPromptFromDraft,
+  buildRoundPromptScaffold,
   buildAggregatedDiscussionPrompt,
   buildCompressionPrompt,
   buildConfirmationPrompt,

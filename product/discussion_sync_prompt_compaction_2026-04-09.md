@@ -36,22 +36,25 @@ Aggregated multi-source prompt:
 ...
 ```
 
+## Later Round Rule
+
+The later-round prompt builders now follow the same compaction rule in both manual and auto flows:
+
+- keep the editable/shared draft focused on round identity, task, and output structure
+- append source material only at the final per-pane assembly step
+- always exclude the target AI's own previous-round reply
+- only attach other AIs' latest previous-round replies
+
 ## Active Scope
 
 The currently active prompt assembly paths in code are:
 
 1. Round-one draft generation in `src/renderer/renderer.js`
 2. Sync / cross-discussion prompt generation in `src/main/index.js`
-3. Aggregated sync prompt generation in `src/main/sync/prompt-builder.js`
+3. Later-round scaffold generation plus per-pane final assembly in `src/main/index.js` and `src/main/sync/prompt-builder.js`
 
-Later round-specific draft builders are not fully implemented yet in the renderer state flow.
-When those rounds are implemented, they should follow the same compaction rule:
-
-- round identity
-- current task
-- source material
-- output structure
-- minimal constraints only
+For manual later rounds, the console now edits a shared scaffold first and the app appends sources only when the draft is actually sent.
+For auto later rounds, the app still assembles prompts per pane directly, but it now applies the same self-exclusion rule.
 
 ## Expected Benefit
 
