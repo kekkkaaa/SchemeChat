@@ -1,0 +1,20 @@
+{
+  "name": "schemechat-local",
+  "interface": {
+    "displayName": "SchemeChat Local"
+  },
+  "plugins": [
+    {
+      "name": "schemechat",
+      "source": {
+        "source": "local",
+        "path": "./plugins/schemechat"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

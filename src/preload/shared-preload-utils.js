@@ -201,15 +201,31 @@ async function waitForCondition(conditionFn, options = {}) {
   return null;
 }
 
+function isElementDisabled(element) {
+  if (!element) {
+    return true;
+  }
+
+  if (typeof element.disabled === 'boolean' && element.disabled) {
+    return true;
+  }
+
+  return String(element.getAttribute?.('aria-disabled') || '').toLowerCase() === 'true';
+}
+
 function createSubmitHandler(provider, config, getInputElement, getSubmitElement) {
   return function submitMessage() {
-    const submitElement = findElement(config[provider]?.submit);
+    const submitElement = findVisibleElement(config[provider]?.submit);
 
-    if (submitElement) {
-      submitElement.click();
+    if (submitElement && !isElementDisabled(submitElement)) {
+      clickElement(submitElement);
     } else {
       const inputElement = getInputElement();
       if (inputElement) {
+        if (typeof inputElement.focus === 'function') {
+          inputElement.focus();
+        }
+
         // Dispatch a robust sequence of events to simulate a real Enter key press
         const eventOptions = {
           key: 'Enter',

@@ -14,7 +14,9 @@
     "build": "electron-builder"
   },
   "dependencies": {
-    "electron-updater": "^6.7.3"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "electron-updater": "^6.7.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "electron": "^41.2.0",

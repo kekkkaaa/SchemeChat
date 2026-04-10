@@ -13,9 +13,11 @@ const {
 } = require('./sync');
 const windowManager = require('./window-manager');
 const { getProviderCompatibility } = require('./provider-compatibility');
+const { createSchemeChatMcpServer } = require('./codex-mcp-server');
 
 let mainWindow;
 let currentZoomFactor = 1.0;
+let codexBridge;
 const pendingPrivateNewChatRequests = new Map();
 const SHARED_PARTITION = 'persist:shared';
 const CHATGPT_PARTITION = getProviderCompatibility('chatgpt').partition;
@@ -268,6 +270,116 @@ function getTargetPaneEntries(paneIds) {
   return paneEntries.filter((paneEntry) => paneIdSet.has(paneEntry.id));
 }
 
+function serializePaneEntry(paneEntry) {
+  return {
+    paneId: paneEntry?.id || '',
+    providerKey: paneEntry?.view?.providerKey || '',
+    providerName: getPaneLabel(paneEntry),
+    url: paneEntry?.view?.webContents?.getURL?.() || '',
+    title: paneEntry?.view?.webContents?.getTitle?.() || '',
+    isLoading: Boolean(paneEntry?.view?.webContents?.isLoading?.()),
+  };
+}
+
+function getWorkspaceSnapshot(paneIds) {
+  const paneEntries = getTargetPaneEntries(paneIds);
+  const layoutState = mainWindow && typeof mainWindow.getLayoutSettingsState === 'function'
+    ? mainWindow.getLayoutSettingsState()
+    : null;
+
+  return {
+    ok: true,
+    discussionConsoleExpanded: mainWindow && typeof mainWindow.getDiscussionConsoleExpanded === 'function'
+      ? mainWindow.getDiscussionConsoleExpanded()
+      : false,
+    layout: layoutState
+      ? {
+        paneCount: layoutState.paneCount,
+        layoutMode: layoutState.layoutMode,
+      }
+      : null,
+    panes: paneEntries.map((paneEntry) => serializePaneEntry(paneEntry)),
+  };
+}
+
+async function inspectProviderRoundStatusesForPaneIds(paneIds) {
+  const paneEntries = getTargetPaneEntries(paneIds);
+  if (paneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+      results: [],
+    };
+  }
+
+  const results = await Promise.all(
+    paneEntries.map(async (paneEntry) => {
+      const inspectionResult = await inspectProviderView(paneEntry.view);
+      return buildInspectionPayload(paneEntry, inspectionResult);
+    })
+  );
+
+  return {
+    ok: results.every((result) => result.ok),
+    results,
+  };
+}
+
+async function captureProviderRoundResultsForPaneIds(paneIds) {
+  const paneEntries = getTargetPaneEntries(paneIds);
+  if (paneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+      results: [],
+    };
+  }
+
+  const results = await Promise.all(
+    paneEntries.map(async (paneEntry) => {
+      const captureResult = await captureStableLatestReply(paneEntry.view);
+      return buildInspectionPayload(paneEntry, captureResult);
+    })
+  );
+
+  return {
+    ok: results.every((result) => result.ok),
+    results,
+  };
+}
+
+async function sendTextUpdateToPaneIds(paneIds, text) {
+  const paneEntries = getTargetPaneEntries(paneIds);
+  if (paneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+    };
+  }
+
+  sendChannelToPaneEntries(paneEntries, 'text-update', text || '');
+  return {
+    ok: true,
+    message: `Mirrored text to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+  };
+}
+
+async function submitMessageToPaneIds(paneIds) {
+  const paneEntries = getTargetPaneEntries(paneIds);
+  if (paneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+    };
+  }
+
+  sendChannelToPaneEntries(paneEntries, 'submit-message');
+  return {
+    ok: true,
+    message: `Submitted messages to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+  };
+}
+
 function sendChannelToPaneEntries(paneEntries, channel, payload) {
   paneEntries.forEach((paneEntry) => {
     if (!paneEntry?.view?.webContents) {
@@ -358,6 +470,23 @@ app.on('ready', async () => {
   mainWindow = await windowManager.createWindow();
   hideNativeAppMenu(mainWindow);
 
+  codexBridge = createSchemeChatMcpServer({
+    version: app.getVersion(),
+    getWorkspaceSnapshot,
+    inspectRoundStatus: inspectProviderRoundStatusesForPaneIds,
+    captureLatestReplies: captureProviderRoundResultsForPaneIds,
+    injectTextToPanes: sendTextUpdateToPaneIds,
+    submitMessageToPanes: submitMessageToPaneIds,
+  });
+
+  try {
+    const status = await codexBridge.start();
+    console.log(`SchemeChat Codex MCP server listening on ${status.url}`);
+  } catch (error) {
+    console.error('Failed to start SchemeChat Codex MCP server:', error);
+    codexBridge = null;
+  }
+
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       return;
@@ -397,19 +526,7 @@ app.on('ready', async () => {
   });
 
   ipcMain.handle('send-text-update-to-panes', async (event, payload = {}) => {
-    const paneEntries = getTargetPaneEntries(payload?.paneIds);
-    if (paneEntries.length === 0) {
-      return {
-        ok: false,
-        message: 'No target panes were found.',
-      };
-    }
-
-    sendChannelToPaneEntries(paneEntries, 'text-update', payload?.text || '');
-    return {
-      ok: true,
-      message: `Mirrored text to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
-    };
+    return sendTextUpdateToPaneIds(payload?.paneIds, payload?.text || '');
   });
 
   ipcMain.handle('selector-error', async (event, source, error) => {
@@ -563,49 +680,11 @@ app.on('ready', async () => {
   });
 
   ipcMain.handle('inspect-provider-round-statuses', async (event, payload = {}) => {
-    const paneEntries = getTargetPaneEntries(payload?.paneIds);
-    if (paneEntries.length === 0) {
-      return {
-        ok: false,
-        message: 'No target panes were found.',
-        results: [],
-      };
-    }
-
-    const results = await Promise.all(
-      paneEntries.map(async (paneEntry) => {
-        const inspectionResult = await inspectProviderView(paneEntry.view);
-        return buildInspectionPayload(paneEntry, inspectionResult);
-      })
-    );
-
-    return {
-      ok: results.every((result) => result.ok),
-      results,
-    };
+    return inspectProviderRoundStatusesForPaneIds(payload?.paneIds);
   });
 
   ipcMain.handle('capture-provider-round-results', async (event, payload = {}) => {
-    const paneEntries = getTargetPaneEntries(payload?.paneIds);
-    if (paneEntries.length === 0) {
-      return {
-        ok: false,
-        message: 'No target panes were found.',
-        results: [],
-      };
-    }
-
-    const results = await Promise.all(
-      paneEntries.map(async (paneEntry) => {
-        const captureResult = await captureStableLatestReply(paneEntry.view);
-        return buildInspectionPayload(paneEntry, captureResult);
-      })
-    );
-
-    return {
-      ok: results.every((result) => result.ok),
-      results,
-    };
+    return captureProviderRoundResultsForPaneIds(payload?.paneIds);
   });
 
   ipcMain.handle('prepare-generated-round', async (event, payload = {}) => {
@@ -747,19 +826,7 @@ app.on('ready', async () => {
   });
 
   ipcMain.handle('submit-message-to-panes', async (event, payload = {}) => {
-    const paneEntries = getTargetPaneEntries(payload?.paneIds);
-    if (paneEntries.length === 0) {
-      return {
-        ok: false,
-        message: 'No target panes were found.',
-      };
-    }
-
-    sendChannelToPaneEntries(paneEntries, 'submit-message');
-    return {
-      ok: true,
-      message: `Submitted messages to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
-    };
+    return submitMessageToPaneIds(payload?.paneIds);
   });
 
   // Handle new chat request
@@ -900,6 +967,11 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (codexBridge) {
+    codexBridge.stop().catch((error) => {
+      console.error('Failed to stop SchemeChat Codex MCP server:', error);
+    });
+  }
 });
 
 app.on('activate', async () => {

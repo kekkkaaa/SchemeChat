@@ -1,0 +1,43 @@
+{
+  "name": "schemechat",
+  "version": "0.1.0",
+  "description": "Connect Codex to a running local SchemeChat workspace through a loopback MCP server.",
+  "author": {
+    "name": "SchemeChat Local",
+    "email": "local@example.invalid",
+    "url": "https://example.invalid/schemechat"
+  },
+  "homepage": "https://example.invalid/schemechat",
+  "repository": "https://example.invalid/schemechat",
+  "license": "UNLICENSED",
+  "keywords": [
+    "schemechat",
+    "codex",
+    "discussion",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SchemeChat",
+    "shortDescription": "Connect Codex to a running SchemeChat multi-AI discussion workspace",
+    "longDescription": "Use SchemeChat from Codex to inspect local panes, capture replies, inject drafts, and submit prompts against a running desktop discussion workspace.",
+    "developerName": "SchemeChat Local",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://example.invalid/schemechat",
+    "privacyPolicyURL": "https://example.invalid/schemechat/privacy",
+    "termsOfServiceURL": "https://example.invalid/schemechat/terms",
+    "defaultPrompt": [
+      "Inspect my SchemeChat panes and tell me which providers are active.",
+      "Capture the latest replies from my SchemeChat discussion panes.",
+      "Inject a short draft into selected SchemeChat panes and submit it."
+    ],
+    "brandColor": "#1F6FEB",
+    "screenshots": []
+  }
+}

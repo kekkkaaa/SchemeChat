@@ -60,6 +60,15 @@ body {
   color: #124cae;
 }
 
+.topbar-icon-btn {
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .settings-btn {
   min-width: 58px;
 }
