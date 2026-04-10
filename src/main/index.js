@@ -394,6 +394,22 @@ app.on('ready', async () => {
     }
   });
 
+  ipcMain.handle('send-text-update-to-panes', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+      };
+    }
+
+    sendChannelToPaneEntries(paneEntries, 'text-update', payload?.text || '');
+    return {
+      ok: true,
+      message: `Mirrored text to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+    };
+  });
+
   ipcMain.handle('selector-error', async (event, source, error) => {
     if (mainWindow.mainView && mainWindow.mainView.webContents) {
       mainWindow.mainView.webContents.send('selector-error', { source, error });
@@ -654,6 +670,41 @@ app.on('ready', async () => {
         prompt: entry.prompt,
       })),
       previewPrompt: prompts[0]?.prompt || '',
+    };
+  });
+
+  ipcMain.handle('build-generated-round-draft', async (event, payload = {}) => {
+    const promptType = String(payload?.promptType || '').trim();
+    if (!promptType) {
+      return {
+        ok: false,
+        message: 'Prompt type is required.',
+        prompt: '',
+      };
+    }
+
+    const sourceEntries = Array.isArray(payload?.sources)
+      ? payload.sources
+      : [];
+
+    const prompt = buildRoundPrompt(promptType, sourceEntries, {
+      topic: payload?.topic || '',
+      summarizerName: payload?.summarizerName || '',
+      maxLengthPerSource: payload?.maxLengthPerSource,
+    });
+
+    if (!prompt) {
+      return {
+        ok: false,
+        message: `No prompt could be generated for ${promptType}.`,
+        prompt: '',
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Built shared draft for ${promptType}.`,
+      prompt,
     };
   });
 

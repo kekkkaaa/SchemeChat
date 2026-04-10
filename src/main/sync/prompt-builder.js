@@ -79,6 +79,7 @@ function buildAggregatedDiscussionPrompt(sources, options = {}) {
       intro: '继续交叉讨论，不要寒暄。',
       structure: getDiscussionStructureLine(normalizedSources.length),
       requirements: '要求：高压缩，只保留影响判断的新信息，不重复题面。',
+      sourcesHeading: '上一轮完整回复：',
     },
     normalizedSources,
     options
@@ -92,6 +93,7 @@ function buildQuestioningPrompt(sources, options = {}) {
       intro: '继续交叉质疑，不要寒暄。',
       structure: '请用 1/2/3 输出：1. 你认为其他 AI 最值得质疑的点 2. 你因此修正了自己哪一点 3. 你的更新立场。',
       requirements: '要求：高压缩，只点出真正影响结论的冲突、漏洞和修正，不重复题面。',
+      sourcesHeading: '上一轮完整回复：',
     },
     sources,
     options
@@ -104,7 +106,8 @@ function buildCompressionPrompt(sources, options = {}) {
       topic: options.topic ? normalizePromptText(options.topic) : '',
       intro: '继续压缩分歧，不要寒暄。',
       structure: '请用 1/2/3 输出：1. 当前最稳共识 2. 仍影响决策的剩余分歧 3. 你的压缩结论或建议。',
-      requirements: '要求：高压缩，只保留仍影响决策的内容，删掉重复铺垫和边角信息。',
+      requirements: '要求：优先基于上一轮完整回复继续收束，只保留仍影响决策的内容。',
+      sourcesHeading: '上一轮完整回复：',
     },
     sources,
     options
@@ -117,7 +120,8 @@ function buildRevisionPrompt(sources, options = {}) {
       topic: options.topic ? normalizePromptText(options.topic) : '',
       intro: '继续修正方案，不要寒暄。',
       structure: '请用 1/2/3 输出：1. 你决定保留的结论 2. 你基于他方观点做的修正 3. 修正后的方案或判断。',
-      requirements: '要求：高压缩，明确保留什么、修正什么、为什么修正，不重复题面。',
+      requirements: '要求：优先基于上一轮完整回复修正方案，明确保留什么、修正什么、为什么修正。',
+      sourcesHeading: '上一轮完整回复：',
     },
     sources,
     options
@@ -130,7 +134,8 @@ function buildConfirmationPrompt(sources, options = {}) {
       topic: options.topic ? normalizePromptText(options.topic) : '',
       intro: '继续确认收束，不要寒暄。',
       structure: '请用 1/2/3 输出：1. 当前最稳结论 2. 是否还有关键异议 3. 你建议谁来做最终总结，以及一句理由。',
-      requirements: '要求：高压缩，只保留最后仍影响收束的判断，不重复题面。',
+      requirements: '要求：优先基于上一轮完整回复做最后检查，只保留仍影响收束的判断。',
+      sourcesHeading: '上一轮完整回复：',
     },
     sources,
     options
@@ -148,8 +153,8 @@ function buildFinalSummaryPrompt(sources, options = {}) {
       topic: options.topic ? normalizePromptText(options.topic) : '',
       intro,
       structure: '请用 1/2/3 输出：1. 最终方案或结论 2. 关键理由与取舍 3. 主要风险、限制与执行建议。',
-      requirements: '要求：高压缩，明确共识；若仍有保留分歧，只保留最关键的那一点，不重复题面。',
-      sourcesHeading: '其他 AI 最新回复：',
+      requirements: '要求：优先吸收上一轮完整回复里的有效结论，明确共识；若仍有保留分歧，只保留最关键的那一点。',
+      sourcesHeading: '上一轮完整回复：',
     },
     sources,
     options

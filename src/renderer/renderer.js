@@ -23,6 +23,19 @@ const {
   getRoundTypeLabel: getRoundTypeLabelFromCore,
   shouldIncludeSelfSourcesForPrompt,
 } = require('./discussion-core');
+const {
+  buildFallbackRoundResultsFromTracks: buildFallbackRoundResultsFromAutoRun,
+  getCompletedPaneIdsFromTracks,
+  getMissingCapturedPaneIds,
+  getSkippablePaneIdsFromTracks,
+  mergeRoundResults,
+  settleInspectionResults,
+} = require('./discussion-auto-run');
+const {
+  deriveHeaderState,
+  deriveActionButtonState,
+  deriveInputState,
+} = require('./discussion-view-state');
 
 const state = {
   isPanelExpanded: false,
@@ -36,6 +49,8 @@ const state = {
   draft: '',
   draftSent: false,
   draftNeedsRefresh: false,
+  draftPaneIds: [],
+  draftPromptType: '',
   sourcesExpanded: false,
   panes: [],
   providerTracks: {},
@@ -43,6 +58,8 @@ const state = {
   autoPauseReason: '',
   autoPauseMeta: '',
   autoPauseResumeAction: 'resume-waiting',
+  partialErrorResumeAction: 'resume-waiting',
+  globalErrorResumeAction: '',
   autoRunToken: 0,
   currentRoundNumber: 0,
   currentRoundType: '准备开始',
@@ -139,8 +156,12 @@ const refs = {
   resetRulesBtn: document.getElementById('resetRulesBtn'),
 };
 
-const sendTextUpdate = throttle((text) => {
-  ipcRenderer.invoke('send-text-update', text).catch((error) => {
+const sendTextUpdate = throttle((text, paneIds = []) => {
+  const targetPaneIds = Array.isArray(paneIds) ? paneIds.filter(Boolean) : [];
+  const channel = targetPaneIds.length > 0 ? 'send-text-update-to-panes' : 'send-text-update';
+  const payload = targetPaneIds.length > 0 ? { paneIds: targetPaneIds, text } : text;
+
+  ipcRenderer.invoke(channel, payload).catch((error) => {
     console.error('Failed to mirror text:', error);
   });
 }, 60);
@@ -157,6 +178,10 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function getUniquePaneIds(paneIds = []) {
+  return [...new Set((Array.isArray(paneIds) ? paneIds : []).filter(Boolean))];
 }
 
 function getModeOption() {
@@ -177,6 +202,19 @@ function getPaneEntries() {
 
 function getPaneEntryById(paneId) {
   return getPaneEntries().find((pane) => pane.id === paneId) || null;
+}
+
+function getDraftPaneIds() {
+  return getUniquePaneIds(state.draftPaneIds);
+}
+
+function setDraftPaneIds(paneIds = []) {
+  state.draftPaneIds = getUniquePaneIds(paneIds);
+}
+
+function clearDraftContext() {
+  state.draftPaneIds = [];
+  state.draftPromptType = '';
 }
 
 function getRoundTypeLabel(roundNumber = state.currentRoundNumber, modeId = state.modeId) {
@@ -249,31 +287,6 @@ function getCompletedSpeakingCount() {
   }).length;
 }
 
-function getCurrentRoundScopeLabelLegacy__unused() {
-  const speakingPaneIds = Array.isArray(state.expectedPaneIds) ? state.expectedPaneIds : [];
-  if (speakingPaneIds.length === 0) {
-    return '发言：等待参与 AI';
-  }
-
-  if (speakingPaneIds.length === getPaneEntries().length) {
-    if (isWaitingState()) {
-      return `发言：全员（${getCompletedSpeakingCount()} / ${speakingPaneIds.length} 已完成）`;
-    }
-    return `发言：全员（${speakingPaneIds.length} 个）`;
-  }
-
-  if (speakingPaneIds.length === 1) {
-    const summarizerPane = getPaneEntryById(speakingPaneIds[0]);
-    const summarizerLabel = summarizerPane?.providerName || state.summarizerProviderName || '总结者';
-    if (isWaitingState()) {
-      return `发言：${summarizerLabel}（总结者）`;
-    }
-    return `发言：${summarizerLabel}（仅总结者）`;
-  }
-
-  return `发言：${speakingPaneIds.length} 个参与 AI`;
-}
-
 function getRunModeLabel() {
   return state.runMode === 'auto' ? '自动推进' : '手动推进';
 }
@@ -291,12 +304,12 @@ function getResolvedSummarizerPaneId() {
 }
 
 function getResolvedSummarizerLabel() {
-  const paneId = getResolvedSummarizerPaneId();
+  const paneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
   if (paneId) {
     return getPaneEntryById(paneId)?.providerName || getProviderTrack(paneId)?.providerName || state.summarizerProviderName || '总结者';
   }
 
-  return state.summarizerProviderName || '默认自动推荐';
+  return '待手动指定';
 }
 
 function setManualSummarizer(paneId) {
@@ -345,23 +358,43 @@ function syncTextareaValue(element, value) {
 }
 
 function getDraftStateLabel() {
-  if (state.consoleState === 'round-waiting') {
+  if (isDraftPreparingState()) {
+    return '生成中';
+  }
+
+  if (isDispatchingState()) {
+    return '发送中';
+  }
+
+  if (isWaitingState()) {
     return '等待中';
   }
 
-  if (state.consoleState === 'round-review') {
+  if (isReviewState()) {
     return '已完成';
   }
 
-  if (state.consoleState === 'auto-paused') {
+  if (isSummarizerSelectingState()) {
+    return '待确认';
+  }
+
+  if (isPartialErrorState()) {
+    return '局部异常';
+  }
+
+  if (isAutoPausedState()) {
     return '自动暂停';
   }
 
-  if (state.consoleState === 'finished') {
+  if (isGlobalErrorState()) {
+    return '流程异常';
+  }
+
+  if (isFinishedState()) {
     return '最终方案';
   }
 
-  if (state.consoleState !== 'draft-ready') {
+  if (!isDraftReadyState()) {
     return '待生成';
   }
 
@@ -370,6 +403,56 @@ function getDraftStateLabel() {
   }
 
   return state.draftSent ? '已发送' : '可发送';
+}
+
+function getSendButtonLabel(roundType = state.currentRoundType) {
+  switch (roundType) {
+    case '首轮分析':
+      return '发送首轮';
+    case '交叉讨论':
+      return '发送交叉讨论';
+    case '交叉质疑':
+      return '发送交叉质疑';
+    case '修正方案':
+      return '发送修正方案';
+    case '分歧压缩':
+      return '发送压缩轮';
+    case '确认总结者':
+      return '发送确认轮';
+    case '最终总结':
+      return '发送最终总结';
+    default:
+      return '发送本轮';
+  }
+}
+
+function getRoundReviewPrimaryLabel() {
+  const mode = getModeOption();
+  if (state.currentRoundNumber >= mode.totalRounds) {
+    return '完成讨论';
+  }
+
+  const nextRoundNumber = state.currentRoundNumber + 1;
+  const promptType = getAutoPromptType(nextRoundNumber, mode.id);
+  if (promptType === 'final-summary') {
+    return '进入总结者选择';
+  }
+
+  const nextRoundType = getRoundTypeLabel(nextRoundNumber);
+  switch (nextRoundType) {
+    case '交叉讨论':
+      return '开始交叉讨论';
+    case '交叉质疑':
+      return '开始交叉质疑';
+    case '修正方案':
+      return '进入修正轮';
+    case '分歧压缩':
+      return '进入压缩轮';
+    case '确认总结者':
+      return '进入确认轮';
+    default:
+      return `进入${nextRoundType}`;
+  }
 }
 
 function setFeedback(message, options = {}) {
@@ -393,6 +476,8 @@ function renderFeedback() {
 
 function getProviderTrackStatusLabel(track) {
   switch (track?.status) {
+    case 'dispatching':
+      return '发送中';
     case 'waiting':
       return '生成中';
     case 'completed':
@@ -408,6 +493,18 @@ function getProviderTrackStatusLabel(track) {
   }
 }
 
+function isDraftPreparingState() {
+  return state.consoleState === 'draft-preparing';
+}
+
+function isDraftReadyState() {
+  return state.consoleState === 'draft-ready';
+}
+
+function isDispatchingState() {
+  return state.consoleState === 'round-dispatching';
+}
+
 function isWaitingState() {
   return state.consoleState === 'round-waiting';
 }
@@ -416,12 +513,58 @@ function isReviewState() {
   return state.consoleState === 'round-review';
 }
 
+function isSummarizerSelectingState() {
+  return state.consoleState === 'summarizer-selecting';
+}
+
+function isPartialErrorState() {
+  return state.consoleState === 'round-partial-error';
+}
+
 function isAutoPausedState() {
   return state.consoleState === 'auto-paused';
 }
 
+function isGlobalErrorState() {
+  return state.consoleState === 'global-error';
+}
+
 function isFinishedState() {
   return state.consoleState === 'finished';
+}
+
+function getScopePaneIds() {
+  if (isSummarizerSelectingState()) {
+    const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
+    return summarizerPaneId ? [summarizerPaneId] : [];
+  }
+
+  if (isDraftPreparingState() || isDraftReadyState() || isDispatchingState()) {
+    return getDraftPaneIds();
+  }
+
+  return getUniquePaneIds(state.expectedPaneIds);
+}
+
+function mirrorDraftToTargetPanes() {
+  const paneIds = getDraftPaneIds();
+  if (paneIds.length === 0) {
+    return;
+  }
+
+  sendTextUpdate(state.draft, paneIds);
+}
+
+async function mirrorDraftToTargetPanesNow() {
+  const paneIds = getDraftPaneIds();
+  if (paneIds.length === 0) {
+    return;
+  }
+
+  await ipcRenderer.invoke('send-text-update-to-panes', {
+    paneIds,
+    text: state.draft,
+  });
 }
 
 function getRoundStatusCounts(paneIds = state.expectedPaneIds) {
@@ -435,6 +578,7 @@ function getRoundStatusCounts(paneIds = state.expectedPaneIds) {
     return counts;
   }, {
     total: paneIds.length,
+    dispatching: 0,
     completed: 0,
     failed: 0,
     skipped: 0,
@@ -447,28 +591,22 @@ function getRoundStatusCounts(paneIds = state.expectedPaneIds) {
 }
 
 function getCompletedPaneIds(paneIds = state.expectedPaneIds) {
-  return paneIds.filter((paneId) => {
-    const track = getProviderTrack(paneId);
-    return track?.status === 'completed' && String(track?.latestReplyText || '').trim();
-  });
+  return getCompletedPaneIdsFromTracks(paneIds, state.providerTracks);
 }
 
 function getSkippablePaneIds() {
   const paneIds = Array.isArray(state.expectedPaneIds) ? state.expectedPaneIds : [];
-  return paneIds.filter((paneId) => {
-    const status = getProviderTrack(paneId)?.status || 'ready';
-    return status !== 'completed' && status !== 'skipped' && status !== 'muted';
-  });
+  return getSkippablePaneIdsFromTracks(paneIds, state.providerTracks);
 }
 
 function getCanSkipProblemPanes() {
-  return isAutoPausedState()
+  return (isAutoPausedState() || isPartialErrorState())
     && getSkippablePaneIds().length > 0
     && getCompletedPaneIds().length > 0;
 }
 
 function getRoundProgressLabel(paneIds = state.expectedPaneIds) {
-  if (!(isWaitingState() || isReviewState() || isAutoPausedState() || isFinishedState())) {
+  if (!(isDispatchingState() || isWaitingState() || isReviewState() || isPartialErrorState() || isAutoPausedState() || isFinishedState())) {
     return '';
   }
 
@@ -483,6 +621,9 @@ function getRoundProgressLabel(paneIds = state.expectedPaneIds) {
   if (counts.failed > 0) {
     parts.push(`${counts.failed} \u5f02\u5e38`);
   }
+  if (counts.dispatching > 0) {
+    parts.push(`${counts.dispatching} \u53d1\u9001\u4e2d`);
+  }
   if (counts.waiting > 0) {
     parts.push(`${counts.waiting} \u7b49\u5f85\u4e2d`);
   }
@@ -492,8 +633,8 @@ function getRoundProgressLabel(paneIds = state.expectedPaneIds) {
   return parts.join(' / ');
 }
 
-function getCurrentRoundScopeLabel() {
-  const speakingPaneIds = Array.isArray(state.expectedPaneIds) ? state.expectedPaneIds : [];
+function getCurrentRoundScopeLabel(paneIds = getScopePaneIds()) {
+  const speakingPaneIds = getUniquePaneIds(paneIds);
   if (speakingPaneIds.length === 0) {
     return '\u53d1\u8a00\uff1a\u7b49\u5f85\u53c2\u4e0e AI';
   }
@@ -569,6 +710,7 @@ function buildRoundOneDraft() {
 function renderParticipants() {
   const panes = getPaneEntries();
   refs.participantTags.innerHTML = '';
+  const scopePaneIds = getScopePaneIds();
 
   if (panes.length === 0) {
     refs.participantTags.appendChild(createStaticChip('等待参与 AI', 'is-empty'));
@@ -579,7 +721,12 @@ function renderParticipants() {
     return;
   }
 
-  const showTrackStatuses = isWaitingState() || isReviewState() || isAutoPausedState() || isFinishedState();
+  const showTrackStatuses = isDispatchingState()
+    || isWaitingState()
+    || isReviewState()
+    || isPartialErrorState()
+    || isAutoPausedState()
+    || isFinishedState();
   const participantPreview = panes.map((pane) => {
     const track = getProviderTrack(pane.id);
     if (showTrackStatuses && track) {
@@ -606,8 +753,9 @@ function renderParticipants() {
   refs.participantCountBadge.textContent = `${panes.length} 个`;
   refs.participantSummaryText.textContent = participantSummary;
   refs.participantSummaryText.title = participantPreview;
-  if (showTrackStatuses && state.expectedPaneIds.length > 0) {
-    refs.speakerScopeText.textContent = getCurrentRoundScopeLabel();
+
+  if (scopePaneIds.length > 0) {
+    refs.speakerScopeText.textContent = getCurrentRoundScopeLabel(scopePaneIds);
     return;
   }
 
@@ -629,13 +777,15 @@ function renderSummarizerSelector() {
 
   const manualSelected = state.summarizerSelectionSource === 'manual' && getResolvedSummarizerPaneId();
   const currentSummarizerId = manualSelected || chooseAutoSummarizerPaneId();
-  const currentSummarizerLabel = getPaneEntryById(currentSummarizerId)?.providerName || '默认自动推荐';
+  const currentSummarizerLabel = getPaneEntryById(currentSummarizerId)?.providerName || '待手动指定';
 
   refs.summarizerSummaryText.textContent = currentSummarizerLabel;
   refs.summarizerModeBadge.textContent = manualSelected ? '手动' : '自动';
   refs.summarizerHintText.textContent = manualSelected
     ? '最终总结轮会优先使用你手动指定的总结者。'
-    : '当前按默认策略自动推荐；你也可以提前手动指定。';
+    : currentSummarizerId
+      ? '当前按确认轮推荐优先、默认策略兜底自动推荐；你也可以提前手动指定。'
+      : '当前未形成明确自动推荐，请手动指定后再进入最终总结。';
   refs.clearSummarizerBtn.disabled = !manualSelected;
 
   panes.forEach((pane) => {
@@ -662,80 +812,6 @@ function renderSummarizerSelector() {
 
 function getSortedRoundHistory() {
   return [...state.roundHistory].sort((left, right) => left.roundNumber - right.roundNumber);
-}
-
-function renderRoundHistoryLegacy__unused() {
-  const roundHistory = getSortedRoundHistory();
-  refs.roundHistoryList.innerHTML = '';
-
-  if (roundHistory.length === 0) {
-    refs.roundHistorySummaryText.textContent = '还没有已完成轮次';
-    refs.roundHistoryCountBadge.textContent = '0 轮';
-    refs.roundHistoryList.appendChild(createStaticChip('等待首轮完成', 'is-empty'));
-    return;
-  }
-
-  refs.roundHistorySummaryText.textContent = isFinishedState()
-    ? '整场讨论已完成，可回看各轮结果'
-    : `已完成 ${roundHistory.length} 轮，可回看稳定结果`;
-  refs.roundHistoryCountBadge.textContent = `${roundHistory.length} 轮`;
-
-  roundHistory.forEach((roundEntry) => {
-    const card = document.createElement('article');
-    const isFinalRound = roundEntry.roundType === '最终总结';
-    card.className = `round-history-card${isFinalRound ? ' is-final' : ''}`;
-
-    const header = document.createElement('div');
-    header.className = 'round-history-card-header';
-
-    const title = document.createElement('span');
-    title.className = 'round-history-card-title';
-    title.textContent = `第 ${roundEntry.roundNumber} 轮 · ${roundEntry.roundType}`;
-
-    const meta = document.createElement('span');
-    meta.className = 'round-history-card-meta';
-    meta.textContent = `${Array.isArray(roundEntry.results) ? roundEntry.results.length : 0} 条结果`;
-
-    header.appendChild(title);
-    header.appendChild(meta);
-    card.appendChild(header);
-
-    const entryList = document.createElement('div');
-    entryList.className = 'round-history-entry-list';
-
-    (Array.isArray(roundEntry.results) ? roundEntry.results : []).forEach((result) => {
-      const entry = document.createElement('div');
-      const isSummarizerResult = Boolean(state.summarizerPaneId) && result.paneId === state.summarizerPaneId;
-      entry.className = `round-history-entry${isSummarizerResult ? ' is-summarizer' : ''}`;
-
-      const entryHead = document.createElement('div');
-      entryHead.className = 'round-history-entry-head';
-
-      const label = document.createElement('span');
-      label.className = 'round-history-entry-label';
-      label.textContent = result.providerName || '未知 AI';
-
-      const entryMeta = document.createElement('span');
-      entryMeta.className = 'round-history-entry-meta';
-      entryMeta.textContent = isSummarizerResult
-        ? '总结者'
-        : (result.sourceMethod ? `来源：${result.sourceMethod}` : '已完成');
-
-      const body = document.createElement('div');
-      body.className = 'round-history-entry-body';
-      body.textContent = summarizeText(result.latestReplyText || '', 180);
-      body.title = result.latestReplyText || '';
-
-      entryHead.appendChild(label);
-      entryHead.appendChild(entryMeta);
-      entry.appendChild(entryHead);
-      entry.appendChild(body);
-      entryList.appendChild(entry);
-    });
-
-    card.appendChild(entryList);
-    refs.roundHistoryList.appendChild(card);
-  });
 }
 
 function renderStickyRuleTags() {
@@ -840,7 +916,7 @@ function renderSupportSummaries() {
 
   refs.supportSummaryMeta.textContent = `${runModeSummary} · ${ruleSummary} · ${tempSummary}`;
   refs.draftSourcesSummaryText.textContent = `${topicSummary} · ${runModeSummary} · ${summarizerSummary} · ${tempSummary}`;
-  refs.moreActionsSummaryText.textContent = state.consoleState === 'draft-ready'
+  refs.moreActionsSummaryText.textContent = isDraftReadyState()
     ? '新对话 / 刷新 / 回到准备阶段'
     : '新对话 / 刷新 / 缩放';
 }
@@ -965,160 +1041,68 @@ function renderPanelVisibility() {
 
 function renderHeader() {
   const mode = getModeOption();
-  const stateLabel = getDraftStateLabel();
-  const paneCount = getPaneEntries().length;
-  const runModeLabel = getRunModeLabel();
   const roundNumber = state.currentRoundNumber || 0;
   const roundType = state.currentRoundType || getRoundTypeLabel(roundNumber);
+  const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
+  const headerState = deriveHeaderState({
+    modeLabel: mode.label,
+    modeDescription: mode.description,
+    modeSummary: mode.summary,
+    runModeLabel: getRunModeLabel(),
+    roundNumber,
+    totalRounds: mode.totalRounds,
+    roundType,
+    stateLabel: getDraftStateLabel(),
+    topicSummary: state.topic.trim() ? summarizeText(state.topic, 32) : '',
+    paneCount: getPaneEntries().length,
+    runMode: state.runMode,
+    summarizerLabel: getResolvedSummarizerLabel(),
+    hasResolvedSummarizer: Boolean(summarizerPaneId),
+    feedbackMessage: state.feedbackMessage,
+    autoPauseReason: state.autoPauseReason,
+    roundGoalLabel: getRoundGoalLabel(roundType),
+    roundReviewPrimaryLabel: getRoundReviewPrimaryLabel(),
+    sendButtonLabel: getSendButtonLabel(roundType),
+    draftSent: state.draftSent,
+    draftNeedsRefresh: state.draftNeedsRefresh,
+    isPreparing: isDraftPreparingState(),
+    isDispatching: isDispatchingState(),
+    isWaiting: isWaitingState(),
+    isReview: isReviewState(),
+    isSummarizerSelecting: isSummarizerSelectingState(),
+    isPartialError: isPartialErrorState(),
+    isAutoPaused: isAutoPausedState(),
+    isGlobalError: isGlobalErrorState(),
+    isFinished: isFinishedState(),
+    isDraftReady: isDraftReadyState(),
+  });
 
-  refs.modeBadge.textContent = mode.label;
-  refs.dockModeBadge.textContent = mode.label;
-  refs.modeDescription.textContent = mode.summary || mode.description;
-  refs.modeDescription.title = mode.description;
-  refs.modeFlowHint.textContent = mode.description;
-  refs.modeFlowHint.title = mode.description;
-  refs.workspaceEyebrow.textContent = '讨论工作台';
-  refs.launcherRunModeBtn.textContent = runModeLabel;
-  refs.panelRunModeBtn.textContent = runModeLabel;
-
-  if (state.consoleState === 'round-waiting') {
-    refs.stageBadge.textContent = roundType;
-    refs.dockStageBadge.textContent = roundType;
-    refs.roundBadge.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = `${getRoundGoalLabel(roundType)} 当前正在等待本轮回复完成。`;
-    refs.workspaceTitle.textContent = state.topic.trim()
-      ? summarizeText(state.topic, 32)
-      : `${roundType}进行中`;
-    refs.workspaceSubtitle.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮 · ${roundType} · ${state.runMode === 'auto' ? '自动等待中' : '等待本轮完成'}`;
-
-    refs.draftStatusBadge.textContent = stateLabel;
-    refs.draftStatusBadge.className = 'status-pill is-running';
-    refs.launcherPrimaryBtn.textContent = '等待本轮完成';
-    refs.panelPrimaryBtn.textContent = '等待本轮完成';
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = '讨论主题';
-    refs.dockInput.placeholder = '系统正在等待本轮完成';
-    refs.idlePanel.classList.add('hidden');
-    refs.draftPanel.classList.remove('hidden');
-    return;
-  }
-
-  if (state.consoleState === 'round-review') {
-    refs.stageBadge.textContent = '本轮完成';
-    refs.dockStageBadge.textContent = '本轮完成';
-    refs.roundBadge.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = `${roundType}已完成，可查看结果并决定下一步。`;
-    refs.workspaceTitle.textContent = state.topic.trim()
-      ? summarizeText(state.topic, 32)
-      : `${roundType}已完成`;
-    refs.workspaceSubtitle.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮 · ${roundType} · 本轮结果已就绪`;
-
-    refs.draftStatusBadge.textContent = stateLabel;
-    refs.draftStatusBadge.className = 'status-pill is-sent';
-    refs.launcherPrimaryBtn.textContent = '本轮已完成';
-    refs.panelPrimaryBtn.textContent = '本轮已完成';
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = '讨论主题';
-    refs.dockInput.placeholder = '本轮结果已就绪';
-    refs.idlePanel.classList.add('hidden');
-    refs.draftPanel.classList.remove('hidden');
-    return;
-  }
-
-  if (state.consoleState === 'auto-paused') {
-    refs.stageBadge.textContent = '自动暂停';
-    refs.dockStageBadge.textContent = '自动暂停';
-    refs.roundBadge.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = state.autoPauseReason || '自动运行已暂停，等待你决定是继续还是接管。';
-    refs.workspaceTitle.textContent = state.topic.trim()
-      ? summarizeText(state.topic, 32)
-      : '自动运行已暂停';
-    refs.workspaceSubtitle.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮 · ${roundType} · 等待用户接管`;
-
-    refs.draftStatusBadge.textContent = stateLabel;
-    refs.draftStatusBadge.className = 'status-pill is-paused';
-    refs.launcherPrimaryBtn.textContent = '继续自动运行';
-    refs.panelPrimaryBtn.textContent = '继续自动运行';
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = '讨论主题';
-    refs.dockInput.placeholder = '自动运行已暂停，可继续或改为手动接管';
-    refs.idlePanel.classList.add('hidden');
-    refs.draftPanel.classList.remove('hidden');
-    return;
-  }
-
-  if (state.consoleState === 'finished') {
-    const summarizerLabel = state.summarizerProviderName || '总结者';
-    refs.stageBadge.textContent = '自动完成';
-    refs.dockStageBadge.textContent = '自动完成';
-    refs.roundBadge.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = `整场讨论已完成，最终方案由 ${summarizerLabel} 输出。`;
-    refs.workspaceTitle.textContent = state.topic.trim()
-      ? summarizeText(state.topic, 32)
-      : '最终方案已生成';
-    refs.workspaceSubtitle.textContent = `第 ${roundNumber} / ${mode.totalRounds} 轮 · 最终总结 · ${summarizerLabel} 已完成输出`;
-
-    refs.draftStatusBadge.textContent = stateLabel;
-    refs.draftStatusBadge.className = 'status-pill is-sent';
-    refs.launcherPrimaryBtn.textContent = '已自动完成';
-    refs.panelPrimaryBtn.textContent = '已自动完成';
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = '最终方案';
-    refs.dockInput.placeholder = '最终方案已生成';
-    refs.idlePanel.classList.add('hidden');
-    refs.draftPanel.classList.remove('hidden');
-    return;
-  }
-
-  if (state.consoleState === 'draft-ready') {
-    refs.stageBadge.textContent = roundType;
-    refs.dockStageBadge.textContent = roundType;
-    refs.roundBadge.textContent = `第 ${roundNumber || 1} / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = getRoundGoalLabel(roundType);
-    refs.workspaceTitle.textContent = state.topic.trim()
-      ? summarizeText(state.topic, 32)
-      : (state.draftSent ? `${roundType} Draft 已发送` : `${roundType} Draft 已就绪`);
-    refs.workspaceSubtitle.textContent = `第 ${roundNumber || 1} / ${mode.totalRounds} 轮 · ${roundType} · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`;
-
-    refs.draftStatusBadge.textContent = stateLabel;
-    refs.draftStatusBadge.className = `status-pill${state.draftNeedsRefresh ? ' is-stale' : (state.draftSent ? ' is-sent' : ' is-editable')}`;
-    refs.launcherPrimaryBtn.textContent = state.draftSent ? '再次发送' : (state.runMode === 'auto' ? '自动完成' : '发送首轮');
-    refs.panelPrimaryBtn.textContent = refs.launcherPrimaryBtn.textContent;
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = stateLabel;
-    refs.dockInputLabel.textContent = 'Draft 编辑';
-    refs.dockInput.placeholder = '修改首轮提示词，或直接再次发送';
-    refs.idlePanel.classList.add('hidden');
-    refs.draftPanel.classList.remove('hidden');
-  } else {
-    refs.stageBadge.textContent = '准备开始';
-    refs.dockStageBadge.textContent = '准备开始';
-    refs.roundBadge.textContent = `第 0 / ${mode.totalRounds} 轮`;
-    refs.roundGoalText.textContent = '目标：先明确讨论主题，再生成首轮 Draft。';
-    refs.workspaceTitle.textContent = '准备讨论主题';
-    refs.workspaceSubtitle.textContent = `第 0 / ${mode.totalRounds} 轮 · 准备开始 · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`;
-
-    refs.draftStatusBadge.textContent = '待生成';
-    refs.draftStatusBadge.className = 'status-pill';
-    refs.launcherPrimaryBtn.textContent = state.runMode === 'auto' ? '自动完成' : '开始首轮';
-    refs.panelPrimaryBtn.textContent = refs.launcherPrimaryBtn.textContent;
-    refs.launcherSyncBtn.textContent = '同步';
-    refs.panelSyncBtn.textContent = '同步';
-    refs.dockStateBadge.textContent = '待生成';
-    refs.dockInputLabel.textContent = '讨论主题';
-    refs.dockInput.placeholder = state.runMode === 'auto' ? '写清主题后，自动跑完整场讨论' : '写清主题后，开始首轮';
-    refs.idlePanel.classList.remove('hidden');
-    refs.draftPanel.classList.add('hidden');
-  }
+  refs.modeBadge.textContent = headerState.modeBadgeText;
+  refs.dockModeBadge.textContent = headerState.dockModeBadgeText;
+  refs.modeDescription.textContent = headerState.modeDescriptionText;
+  refs.modeDescription.title = headerState.modeDescriptionTitle;
+  refs.modeFlowHint.textContent = headerState.modeFlowHintText;
+  refs.modeFlowHint.title = headerState.modeFlowHintTitle;
+  refs.workspaceEyebrow.textContent = headerState.workspaceEyebrowText;
+  refs.launcherRunModeBtn.textContent = headerState.launcherRunModeText;
+  refs.panelRunModeBtn.textContent = headerState.panelRunModeText;
+  refs.stageBadge.textContent = headerState.stageBadgeText;
+  refs.dockStageBadge.textContent = headerState.dockStageBadgeText;
+  refs.roundBadge.textContent = headerState.roundBadgeText;
+  refs.roundGoalText.textContent = headerState.roundGoalText;
+  refs.workspaceTitle.textContent = headerState.workspaceTitleText;
+  refs.workspaceSubtitle.textContent = headerState.workspaceSubtitleText;
+  refs.draftStatusBadge.textContent = headerState.draftStatusBadgeText;
+  refs.draftStatusBadge.className = headerState.draftStatusBadgeClassName;
+  refs.launcherPrimaryBtn.textContent = headerState.launcherPrimaryText;
+  refs.panelPrimaryBtn.textContent = headerState.panelPrimaryText;
+  refs.launcherSyncBtn.textContent = headerState.launcherSyncText;
+  refs.panelSyncBtn.textContent = headerState.panelSyncText;
+  refs.dockStateBadge.textContent = headerState.dockStateBadgeText;
+  refs.dockInputLabel.textContent = headerState.dockInputLabelText;
+  refs.dockInput.placeholder = headerState.dockInputPlaceholder;
+  refs.idlePanel.classList.toggle('hidden', headerState.idlePanelHidden);
+  refs.draftPanel.classList.toggle('hidden', headerState.draftPanelHidden);
 }
 
 function renderActionButtons() {
@@ -1126,62 +1110,85 @@ function renderActionButtons() {
   const hasTopic = Boolean(state.topic.trim());
   const hasDraft = Boolean(state.draft.trim());
   const controlsBusy = syncInFlight || privateNewChatInFlight;
+  const isPreparing = isDraftPreparingState();
+  const isDispatching = isDispatchingState();
   const isWaiting = isWaitingState();
+  const isSummarizerSelecting = isSummarizerSelectingState();
+  const isPartialError = isPartialErrorState();
   const isAutoPaused = isAutoPausedState();
+  const isGlobalError = isGlobalErrorState();
   const isRoundReview = isReviewState();
   const isFinished = isFinishedState();
   const canSkipProblemPanes = getCanSkipProblemPanes();
-  const canReset = state.consoleState === 'draft-ready'
+  const canReset = isDraftReadyState()
     || hasTopic
     || Boolean(state.roundNote.trim())
     || state.quickPromptIds.length > 0;
 
-  let primaryDisabled = false;
-  if (controlsBusy || isWaiting) {
-    primaryDisabled = true;
-  } else if (isAutoPaused) {
-    primaryDisabled = !hasPanes;
-  } else if (isFinished) {
-    primaryDisabled = true;
-  } else if (isRoundReview) {
-    primaryDisabled = true;
-  } else if (state.consoleState === 'draft-ready') {
-    primaryDisabled = !hasPanes || !hasDraft;
-  } else {
-    primaryDisabled = !hasTopic;
-  }
+  const actionState = deriveActionButtonState({
+    controlsBusy,
+    hasPanes,
+    hasTopic,
+    hasDraft,
+    canSkipProblemPanes,
+    canReset,
+    autoRunActive: state.autoRunActive,
+    currentRoundNumber: state.currentRoundNumber,
+    globalErrorResumeAction: state.globalErrorResumeAction,
+    expectedPaneCount: state.expectedPaneIds.length,
+    hasResolvedSummarizer: Boolean(getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId()),
+    isPreparing,
+    isDispatching,
+    isWaiting,
+    isSummarizerSelecting,
+    isPartialError,
+    isAutoPaused,
+    isGlobalError,
+    isRoundReview,
+    isFinished,
+    isDraftReady: isDraftReadyState(),
+  });
 
-  refs.launcherPrimaryBtn.disabled = primaryDisabled;
+  refs.launcherPrimaryBtn.disabled = actionState.primaryDisabled;
   refs.panelPrimaryBtn.disabled = refs.launcherPrimaryBtn.disabled;
-  refs.launcherSyncBtn.disabled = syncInFlight || !hasPanes || isWaiting || isFinished;
+  refs.launcherSyncBtn.disabled = actionState.syncDisabled;
   refs.panelSyncBtn.disabled = refs.launcherSyncBtn.disabled;
-  refs.launcherSkipBtn.disabled = !canSkipProblemPanes;
+  refs.launcherSkipBtn.disabled = actionState.skipDisabled;
   refs.panelSkipBtn.disabled = refs.launcherSkipBtn.disabled;
-  refs.launcherPrivateBtn.disabled = controlsBusy || !hasPanes || isWaiting || isFinished;
+  refs.launcherPrivateBtn.disabled = actionState.privateDisabled;
   refs.panelPrivateBtn.disabled = refs.launcherPrivateBtn.disabled;
-  refs.regenerateDraftBtn.disabled = state.consoleState !== 'draft-ready' || !hasTopic;
-  refs.resetConsoleBtn.disabled = !canReset;
-  refs.launcherRunModeBtn.disabled = controlsBusy || (state.autoRunActive && !isAutoPaused && !isRoundReview && !isFinished);
+  refs.regenerateDraftBtn.disabled = actionState.regenerateDraftDisabled;
+  refs.resetConsoleBtn.disabled = actionState.resetConsoleDisabled;
+  refs.launcherRunModeBtn.disabled = actionState.runModeDisabled;
   refs.panelRunModeBtn.disabled = refs.launcherRunModeBtn.disabled;
 }
 
 function renderInputs() {
-  syncTextareaValue(refs.topicInput, state.topic);
-  syncTextareaValue(refs.roundNoteInput, state.roundNote);
-  syncTextareaValue(refs.draftInput, state.draft);
-  syncTextareaValue(refs.dockInput, state.consoleState === 'draft-ready' || isFinishedState() ? state.draft : state.topic);
-  const draftEditable = state.consoleState === 'draft-ready';
-  const inputEditable = !isWaitingState() && !isFinishedState();
-  refs.topicInput.disabled = !inputEditable;
-  refs.roundNoteInput.disabled = !inputEditable;
-  refs.draftInput.disabled = !draftEditable;
-  refs.dockInput.disabled = isWaitingState() || isFinishedState();
+  const inputState = deriveInputState({
+    topic: state.topic,
+    roundNote: state.roundNote,
+    draft: state.draft,
+    isDraftReady: isDraftReadyState(),
+    isPreparing: isDraftPreparingState(),
+    isDispatching: isDispatchingState(),
+    isWaiting: isWaitingState(),
+    isSummarizerSelecting: isSummarizerSelectingState(),
+  });
+
+  syncTextareaValue(refs.topicInput, inputState.topicValue);
+  syncTextareaValue(refs.roundNoteInput, inputState.roundNoteValue);
+  syncTextareaValue(refs.draftInput, inputState.draftValue);
+  syncTextareaValue(refs.dockInput, inputState.dockValue);
+  refs.topicInput.disabled = !inputState.inputEditable;
+  refs.roundNoteInput.disabled = !inputState.inputEditable;
+  refs.draftInput.disabled = !inputState.draftEditable;
+  refs.dockInput.disabled = inputState.dockDisabled;
 }
 
 function render() {
   renderPanelVisibility();
   refs.floatingPanel.classList.toggle('is-idle', state.consoleState === 'idle');
-  refs.floatingPanel.classList.toggle('is-draft-ready', state.consoleState === 'draft-ready');
+  refs.floatingPanel.classList.toggle('is-draft-ready', isDraftReadyState());
   renderHeader();
   renderModeSelector();
   renderStickyRuleTags();
@@ -1201,7 +1208,7 @@ function render() {
 
 function focusPrimaryField() {
   if (state.isPanelExpanded) {
-    if (state.consoleState === 'draft-ready') {
+    if (isDraftReadyState()) {
       refs.draftInput.focus();
       return;
     }
@@ -1255,13 +1262,15 @@ async function loadSettingsState() {
   }
 }
 
-function resetConsoleToIdle() {
+function resetConsoleToIdle(options = {}) {
   state.autoRunToken += 1;
   state.consoleState = 'idle';
   state.autoRunActive = false;
   state.autoPauseReason = '';
   state.autoPauseMeta = '';
   state.autoPauseResumeAction = 'resume-waiting';
+  state.partialErrorResumeAction = 'resume-waiting';
+  state.globalErrorResumeAction = '';
   state.currentRoundNumber = 0;
   state.currentRoundType = '准备开始';
   state.expectedPaneIds = [];
@@ -1276,11 +1285,35 @@ function resetConsoleToIdle() {
   state.draft = '';
   state.draftSent = false;
   state.draftNeedsRefresh = false;
+  clearDraftContext();
   resetAllProviderTrackStatuses();
   render();
-  setFeedback('已回到准备阶段', {
-    meta: '可重写主题、模式或本轮补充，再生成首轮 Draft',
-  });
+  if (!options.silentFeedback) {
+    setFeedback('已回到准备阶段', {
+      meta: '可重写主题、模式或本轮补充，再生成首轮 Draft',
+    });
+  }
+}
+
+function restoreLatestCompletedRoundContext() {
+  const roundHistory = getSortedRoundHistory();
+  const latestRound = roundHistory[roundHistory.length - 1];
+  if (!latestRound) {
+    return false;
+  }
+
+  state.currentRoundNumber = latestRound.roundNumber || 0;
+  state.currentRoundType = latestRound.roundType || getRoundTypeLabel(state.currentRoundNumber);
+  state.expectedPaneIds = getUniquePaneIds([
+    ...(Array.isArray(latestRound.results) ? latestRound.results.map((result) => result?.paneId) : []),
+    ...(Array.isArray(latestRound.skippedPaneIds) ? latestRound.skippedPaneIds : []),
+  ]);
+  state.lastRoundResults = Array.isArray(latestRound.results) ? latestRound.results : [];
+  state.draft = '';
+  state.draftSent = false;
+  state.draftNeedsRefresh = false;
+  clearDraftContext();
+  return true;
 }
 
 function setRunMode(nextRunMode) {
@@ -1294,11 +1327,25 @@ function setRunMode(nextRunMode) {
 
   state.runMode = nextRunMode;
   if (nextRunMode === 'manual' && isAutoPausedState()) {
+    const resumeAction = state.autoPauseResumeAction || 'resume-waiting';
     state.autoRunActive = false;
-    state.autoPauseReason = '';
-    state.autoPauseMeta = '';
-    state.autoPauseResumeAction = 'resume-waiting';
-    state.consoleState = 'round-review';
+    clearAutoPauseState();
+    clearFlowErrorStates();
+
+    if (resumeAction === 'resume-waiting') {
+      state.partialErrorResumeAction = 'resume-waiting';
+      state.consoleState = 'round-partial-error';
+    } else if (resumeAction === 'submit-current-draft') {
+      state.draftSent = false;
+      state.draftNeedsRefresh = false;
+      state.consoleState = 'draft-ready';
+    } else {
+      if (!restoreLatestCompletedRoundContext()) {
+        resetConsoleToIdle();
+        return;
+      }
+      state.consoleState = 'round-review';
+    }
   }
   render();
   setFeedback(nextRunMode === 'auto' ? '已切到自动推进模式。' : '已切到手动推进模式。', {
@@ -1347,30 +1394,6 @@ function clearAutoPauseState() {
   state.autoPauseResumeAction = 'resume-waiting';
 }
 
-function buildFallbackRoundResultsFromTracks(paneIds = []) {
-  return paneIds.map((paneId) => {
-    const track = getProviderTrack(paneId);
-    const pane = getPaneEntryById(paneId);
-    const latestReplyText = String(track?.latestReplyText || '').trim();
-    if (!latestReplyText) {
-      return null;
-    }
-
-    return {
-      paneId,
-      providerKey: track?.providerKey || pane?.providerKey || '',
-      providerName: track?.providerName || pane?.providerName || 'Unknown AI',
-      latestReplyText,
-      sourceMethod: 'track-cache',
-      ok: true,
-      busy: false,
-      hasReply: true,
-      status: 'completed',
-      error: null,
-    };
-  }).filter(Boolean);
-}
-
 async function captureCompletedRoundResultsForPaneIds(paneIds = []) {
   if (!Array.isArray(paneIds) || paneIds.length === 0) {
     return [];
@@ -1389,28 +1412,11 @@ async function captureCompletedRoundResultsForPaneIds(paneIds = []) {
     }));
 }
 
-function mergeRoundResults(primaryResults = [], fallbackResults = [], orderedPaneIds = []) {
-  const resultMap = new Map();
-  fallbackResults.forEach((result) => {
-    resultMap.set(result.paneId, result);
-  });
-  primaryResults.forEach((result) => {
-    resultMap.set(result.paneId, result);
-  });
-
-  const orderedIds = orderedPaneIds.length > 0
-    ? orderedPaneIds
-    : Array.from(resultMap.keys());
-
-  return orderedIds
-    .map((paneId) => resultMap.get(paneId))
-    .filter((result) => result && String(result.latestReplyText || '').trim());
-}
-
 function recordCompletedRound(results = [], options = {}) {
   const skippedPaneIds = Array.isArray(options.skippedPaneIds)
     ? [...new Set(options.skippedPaneIds.filter(Boolean))]
     : [];
+
   state.lastRoundResults = results;
   state.roundHistory = [
     ...state.roundHistory.filter((entry) => entry.roundNumber !== state.currentRoundNumber),
@@ -1489,6 +1495,274 @@ function resolveAutoSummarizer() {
   return paneId;
 }
 
+function enterRoundPartialError(message, options = {}) {
+  state.autoRunToken += 1;
+  state.autoRunActive = false;
+  state.partialErrorResumeAction = options.resumeAction || 'resume-waiting';
+  state.consoleState = 'round-partial-error';
+  render();
+  setFeedback(message, {
+    error: true,
+    meta: options.meta || '你可以继续等待、跳过异常 AI，或回到准备阶段。',
+  });
+}
+
+function enterGlobalErrorState(message, options = {}) {
+  state.autoRunToken += 1;
+  state.autoRunActive = false;
+  state.globalErrorResumeAction = options.resumeAction || '';
+  state.consoleState = 'global-error';
+  render();
+  setFeedback(message, {
+    error: true,
+    meta: options.meta || '请重试当前步骤，或回到准备阶段。',
+  });
+}
+
+function clearFlowErrorStates() {
+  state.partialErrorResumeAction = 'resume-waiting';
+  state.globalErrorResumeAction = '';
+}
+
+function setDispatchingTrackStatuses(paneIds = [], silentPaneIds = []) {
+  const targetPaneIds = new Set(getUniquePaneIds(paneIds));
+  const mutedPaneIds = new Set(getUniquePaneIds(silentPaneIds));
+
+  syncProviderTracks();
+  Object.keys(state.providerTracks).forEach((paneId) => {
+    if (targetPaneIds.has(paneId)) {
+      updateProviderTrack(paneId, {
+        status: 'dispatching',
+        error: '',
+      });
+      return;
+    }
+
+    if (mutedPaneIds.has(paneId)) {
+      updateProviderTrack(paneId, {
+        status: 'muted',
+        error: '',
+      });
+      return;
+    }
+
+    updateProviderTrack(paneId, {
+      status: 'ready',
+      error: '',
+    });
+  });
+}
+
+async function finishDiscussion(options = {}) {
+  const finalResult = options.finalResult || (Array.isArray(state.lastRoundResults) ? state.lastRoundResults[0] : null);
+  const finalPane = getPaneEntryById(finalResult?.paneId || state.summarizerPaneId);
+
+  state.autoRunActive = false;
+  state.autoPauseReason = '';
+  state.autoPauseMeta = '';
+  state.autoPauseResumeAction = 'resume-waiting';
+  clearFlowErrorStates();
+  state.summarizerPaneId = finalResult?.paneId || state.summarizerPaneId || '';
+  state.summarizerProviderName = finalPane?.providerName || finalResult?.providerName || state.summarizerProviderName || '总结者';
+  if (state.summarizerSelectionSource !== 'manual') {
+    state.summarizerSelectionSource = 'auto';
+  }
+  state.finalResultText = finalResult?.latestReplyText || state.finalResultText;
+  state.draft = state.finalResultText || state.draft;
+  state.draftSent = true;
+  state.draftNeedsRefresh = false;
+  setDraftPaneIds(state.summarizerPaneId ? [state.summarizerPaneId] : []);
+  state.draftPromptType = 'final-summary';
+  state.consoleState = 'finished';
+  state.expectedPaneIds = state.summarizerPaneId ? [state.summarizerPaneId] : [];
+  render();
+
+  setFeedback(options.automated ? '整场讨论已自动完成。' : '整场讨论已完成。', {
+    meta: `${state.summarizerProviderName} 已输出最终方案，你现在可以直接查看结果。`,
+  });
+}
+
+async function prepareGeneratedRoundDraft(options = {}) {
+  const paneIds = getUniquePaneIds(options.paneIds);
+  const promptType = String(options.promptType || '').trim();
+  const roundSources = getAutoRoundSources(promptType);
+  const maxLengthPerSource = options.maxLengthPerSource || getAutoRoundSourceMaxLength(promptType);
+
+  if (paneIds.length === 0) {
+    enterGlobalErrorState(`第 ${options.roundNumber} 轮缺少可发言的目标面板。`, {
+      meta: '请检查参与 AI 是否仍然存在。',
+      resumeAction: options.resumeAction || 'prepare-next-round',
+    });
+    return;
+  }
+
+  if (!Array.isArray(roundSources) || roundSources.length === 0) {
+    enterGlobalErrorState(`第 ${options.roundNumber} 轮缺少可用材料。`, {
+      meta: '请先确认上一轮结果已经稳定抓取完成。',
+      resumeAction: options.resumeAction || 'prepare-next-round',
+    });
+    return;
+  }
+
+  state.currentRoundNumber = options.roundNumber;
+  state.currentRoundType = getRoundTypeLabel(options.roundNumber);
+  state.consoleState = 'draft-preparing';
+  state.draft = '';
+  state.draftSent = false;
+  state.draftNeedsRefresh = false;
+  setDraftPaneIds(paneIds);
+  state.draftPromptType = promptType;
+  clearFlowErrorStates();
+  render();
+  setFeedback(`正在生成第 ${options.roundNumber} 轮 Draft`, {
+    meta: '系统正在根据上一轮结果装配本轮草稿。',
+  });
+
+  let draftResult;
+  try {
+    draftResult = await ipcRenderer.invoke('build-generated-round-draft', {
+      promptType,
+      sources: roundSources,
+      topic: state.topic,
+      summarizerName: state.summarizerProviderName,
+      maxLengthPerSource,
+    });
+  } catch (error) {
+    console.error('Failed to build generated round draft:', error);
+    enterGlobalErrorState(`第 ${options.roundNumber} 轮 Draft 生成失败。`, {
+      meta: error?.message || '请检查当前页面状态后再试。',
+      resumeAction: options.resumeAction || 'prepare-next-round',
+    });
+    return;
+  }
+
+  if (!draftResult?.ok || !String(draftResult?.prompt || '').trim()) {
+    enterGlobalErrorState(draftResult?.message || `第 ${options.roundNumber} 轮 Draft 生成失败。`, {
+      meta: '当前无法生成可发送的 Draft。',
+      resumeAction: options.resumeAction || 'prepare-next-round',
+    });
+    return;
+  }
+
+  state.draft = draftResult.prompt;
+  state.consoleState = 'draft-ready';
+  render();
+  mirrorDraftToTargetPanes();
+  focusPrimaryField();
+  setFeedback(`已生成第 ${options.roundNumber} 轮 Draft，可发送`, {
+    meta: `将发送给 ${paneIds.length} 个发言 AI；发送前仍可继续编辑。`,
+  });
+}
+
+async function openSummarizerSelectionForNextRound() {
+  const mode = getModeOption();
+  const nextRoundNumber = Math.min(state.currentRoundNumber + 1, mode.totalRounds);
+  state.currentRoundNumber = nextRoundNumber;
+  state.currentRoundType = getRoundTypeLabel(nextRoundNumber);
+  state.consoleState = 'summarizer-selecting';
+  state.draft = '';
+  state.draftSent = false;
+  state.draftNeedsRefresh = false;
+  clearDraftContext();
+  clearFlowErrorStates();
+  render();
+  setFeedback('已进入总结者确认阶段。', {
+    meta: '确认总结者后，系统会生成最终总结 Draft。',
+  });
+}
+
+async function prepareNextManualRound() {
+  const mode = getModeOption();
+  if (state.currentRoundNumber >= mode.totalRounds) {
+    await finishDiscussion({ automated: false });
+    return;
+  }
+
+  const nextRoundNumber = state.currentRoundNumber + 1;
+  const promptType = getAutoPromptType(nextRoundNumber, mode.id);
+  if (!promptType) {
+    enterGlobalErrorState(`当前模式缺少第 ${nextRoundNumber} 轮的 Draft builder。`, {
+      meta: '请先补齐该轮的装配逻辑，或改为自动模式。',
+      resumeAction: 'prepare-next-round',
+    });
+    return;
+  }
+
+  if (promptType === 'final-summary') {
+    await openSummarizerSelectionForNextRound();
+    return;
+  }
+
+  await prepareGeneratedRoundDraft({
+    roundNumber: nextRoundNumber,
+    promptType,
+    paneIds: getSpeakingPaneIds(),
+    resumeAction: 'prepare-next-round',
+  });
+}
+
+async function confirmSummarizerAndPrepareFinalRound() {
+  const summarizerPaneId = resolveAutoSummarizer();
+  if (!summarizerPaneId) {
+    enterGlobalErrorState('当前无法确定总结者。', {
+      meta: '请检查当前参与 AI 是否仍然存在，或先手动指定总结者。',
+      resumeAction: 'confirm-summarizer',
+    });
+    return;
+  }
+
+  await prepareGeneratedRoundDraft({
+    roundNumber: state.currentRoundNumber,
+    promptType: 'final-summary',
+    paneIds: [summarizerPaneId],
+    resumeAction: 'confirm-summarizer',
+  });
+}
+
+async function retryGlobalErrorStep() {
+  switch (state.globalErrorResumeAction) {
+    case 'generate-round-one':
+      await generateRoundOneDraft();
+      return;
+    case 'resume-waiting':
+      await continueCurrentRoundAfterError();
+      return;
+    case 'prepare-next-round':
+      restoreLatestCompletedRoundContext();
+      await prepareNextManualRound();
+      return;
+    case 'confirm-summarizer':
+      await confirmSummarizerAndPrepareFinalRound();
+      return;
+    case 'submit-current-draft':
+      await submitCurrentDraft({
+        automated: state.runMode === 'auto',
+      });
+      return;
+    default:
+      return;
+  }
+}
+
+async function continueCurrentRoundAfterError() {
+  const resumeAction = state.partialErrorResumeAction || 'resume-waiting';
+  if (resumeAction !== 'resume-waiting') {
+    return;
+  }
+
+  const paneIds = state.expectedPaneIds.length > 0 ? state.expectedPaneIds : getSpeakingPaneIds();
+  if (paneIds.length === 0) {
+    return;
+  }
+
+  await startWaitingForCurrentRound({
+    paneIds,
+    automated: false,
+    feedbackMessage: `正在继续等待第 ${state.currentRoundNumber} 轮完成。`,
+    feedbackMeta: '系统会继续观察当前发言 AI 的回复状态。',
+  });
+}
+
 async function prepareAndSubmitAutoRound(options = {}) {
   const paneIds = Array.isArray(options.paneIds)
     ? [...new Set(options.paneIds.filter(Boolean))]
@@ -1496,6 +1770,16 @@ async function prepareAndSubmitAutoRound(options = {}) {
   const roundSources = getAutoRoundSources(options.promptType);
   const includeSelf = shouldIncludeSelfSourcesForPrompt(options.promptType);
   const maxLengthPerSource = options.maxLengthPerSource || getAutoRoundSourceMaxLength(options.promptType);
+
+  state.currentRoundNumber = options.roundNumber;
+  state.currentRoundType = getRoundTypeLabel(options.roundNumber);
+  state.consoleState = 'draft-preparing';
+  state.draft = '';
+  state.draftSent = false;
+  state.draftNeedsRefresh = false;
+  setDraftPaneIds(paneIds);
+  state.draftPromptType = options.promptType;
+  render();
 
   if (paneIds.length === 0) {
     await pauseAutoRun('自动推进缺少可发言的目标面板。', {
@@ -1541,11 +1825,11 @@ async function prepareAndSubmitAutoRound(options = {}) {
     return;
   }
 
-  state.currentRoundNumber = options.roundNumber;
-  state.currentRoundType = getRoundTypeLabel(options.roundNumber);
   state.draft = prepareResult.previewPrompt || '';
   state.draftSent = true;
   state.draftNeedsRefresh = false;
+  state.consoleState = 'round-dispatching';
+  setDispatchingTrackStatuses(paneIds, getSilentPaneIds(paneIds));
   render();
 
   let submitResult;
@@ -1584,33 +1868,12 @@ function getBusyStallPaneLabels(results = []) {
     .map((result) => result.providerName || getPaneEntryById(result.paneId)?.providerName || 'Unknown AI');
 }
 
-async function finishAutoRun() {
-  const finalResult = Array.isArray(state.lastRoundResults) ? state.lastRoundResults[0] : null;
-  const finalPane = getPaneEntryById(finalResult?.paneId || state.summarizerPaneId);
-
-  state.autoRunActive = false;
-  state.summarizerPaneId = finalResult?.paneId || state.summarizerPaneId || '';
-  state.summarizerProviderName = finalPane?.providerName || finalResult?.providerName || state.summarizerProviderName || '总结者';
-  if (state.summarizerSelectionSource !== 'manual') {
-    state.summarizerSelectionSource = 'auto';
-  }
-  state.finalResultText = finalResult?.latestReplyText || '';
-  state.draft = state.finalResultText || state.draft;
-  state.draftSent = true;
-  state.draftNeedsRefresh = false;
-  state.consoleState = 'finished';
-  state.expectedPaneIds = state.summarizerPaneId ? [state.summarizerPaneId] : [];
-  render();
-
-  setFeedback('整场讨论已自动完成。', {
-    meta: `${state.summarizerProviderName} 已输出最终方案，你现在可以直接查看结果。`,
-  });
-}
-
 async function skipProblemPanes() {
-  if (!isAutoPausedState()) {
+  if (!(isAutoPausedState() || isPartialErrorState())) {
     return;
   }
+
+  const wasAutomated = isAutoPausedState();
 
   const skippablePaneIds = getSkippablePaneIds();
   const completedPaneIds = getCompletedPaneIds();
@@ -1637,7 +1900,8 @@ async function skipProblemPanes() {
     console.error('Failed to capture completed round results for skip flow:', error);
   }
 
-  const fallbackResults = buildFallbackRoundResultsFromTracks(completedPaneIds);
+  const panesById = Object.fromEntries(getPaneEntries().map((pane) => [pane.id, pane]));
+  const fallbackResults = buildFallbackRoundResultsFromAutoRun(completedPaneIds, state.providerTracks, panesById);
   const usableResults = mergeRoundResults(capturedResults, fallbackResults, completedPaneIds);
   if (usableResults.length === 0) {
     setFeedback('\u8df3\u8fc7\u540e\u4ecd\u6ca1\u6709\u53ef\u7528\u7684\u672c\u8f6e\u6750\u6599\u3002', {
@@ -1665,7 +1929,10 @@ async function skipProblemPanes() {
     skippedPaneIds: skippablePaneIds,
   });
 
-  clearAutoPauseState();
+  if (wasAutomated) {
+    clearAutoPauseState();
+  }
+  clearFlowErrorStates();
   state.consoleState = 'round-review';
   render();
 
@@ -1676,11 +1943,11 @@ async function skipProblemPanes() {
   const mode = getModeOption();
 
   if (state.currentRoundNumber >= mode.totalRounds) {
-    await finishAutoRun();
+    await finishDiscussion({ automated: wasAutomated });
     return;
   }
 
-  if (usableResults.length === 1) {
+  if (wasAutomated && usableResults.length === 1) {
     const soleResult = usableResults[0];
     const keepManualSummarizer = state.summarizerSelectionSource === 'manual'
       && state.summarizerPaneId === soleResult.paneId;
@@ -1700,17 +1967,24 @@ async function skipProblemPanes() {
     return;
   }
 
-  setFeedback(`\u5df2\u8df3\u8fc7 ${skippedLabelText}\uff0c\u7cfb\u7edf\u5c06\u7ee7\u7eed\u81ea\u52a8\u63a8\u8fdb\u3002`, {
-    meta: `\u672c\u8f6e\u4fdd\u7559 ${usableResults.length} \u6761\u53ef\u7528\u7ed3\u679c\uff0c\u4e0b\u4e00\u8f6e\u4f1a\u7ee7\u7eed\u4f7f\u7528\u8fd9\u4e9b\u6750\u6599\u3002`,
+  if (wasAutomated) {
+    setFeedback(`\u5df2\u8df3\u8fc7 ${skippedLabelText}\uff0c\u7cfb\u7edf\u5c06\u7ee7\u7eed\u81ea\u52a8\u63a8\u8fdb\u3002`, {
+      meta: `\u672c\u8f6e\u4fdd\u7559 ${usableResults.length} \u6761\u53ef\u7528\u7ed3\u679c\uff0c\u4e0b\u4e00\u8f6e\u4f1a\u7ee7\u7eed\u4f7f\u7528\u8fd9\u4e9b\u6750\u6599\u3002`,
+    });
+    await maybeAdvanceAutoRunAfterRound();
+    return;
+  }
+
+  setFeedback(`已跳过 ${skippedLabelText}。`, {
+    meta: `本轮保留 ${usableResults.length} 条可用结果，你现在可以继续进入下一阶段。`,
   });
-  await maybeAdvanceAutoRunAfterRound();
 }
 
 async function maybeAdvanceAutoRunAfterRound() {
   const mode = getModeOption();
 
   if (state.currentRoundNumber >= mode.totalRounds) {
-    await finishAutoRun();
+    await finishDiscussion({ automated: true });
     return;
   }
 
@@ -1754,9 +2028,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
       inspection = await ipcRenderer.invoke('inspect-provider-round-statuses', { paneIds });
     } catch (error) {
       console.error('Failed to inspect provider round statuses:', error);
-      await pauseAutoRun('无法读取当前轮状态。', {
-        meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
-      });
+      if (automated) {
+        await pauseAutoRun('无法读取当前轮状态。', {
+          meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
+        });
+      } else {
+        enterGlobalErrorState('无法读取当前轮状态。', {
+          meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
+          resumeAction: 'resume-waiting',
+        });
+      }
       return;
     }
 
@@ -1765,9 +2046,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
     }
 
     if (!Array.isArray(inspection?.results) || inspection.results.length === 0) {
-      await pauseAutoRun('当前轮没有可用的 Provider 状态。', {
-        meta: '请检查参与 AI 是否仍然存在。',
-      });
+      if (automated) {
+        await pauseAutoRun('当前轮没有可用的 Provider 状态。', {
+          meta: '请检查参与 AI 是否仍然存在。',
+        });
+      } else {
+        enterGlobalErrorState('当前轮没有可用的 Provider 状态。', {
+          meta: '请检查参与 AI 是否仍然存在。',
+          resumeAction: 'resume-waiting',
+        });
+      }
       return;
     }
 
@@ -1776,51 +2064,40 @@ async function pollRoundCompletion(token, paneIds, automated) {
 
     const failedInspection = inspection.results.find((result) => !result.ok);
     if (failedInspection) {
-      await pauseAutoRun(`${failedInspection.providerName} 状态检查失败。`, {
-        meta: failedInspection.error || '请检查该 AI 页面是否仍可读取。',
-      });
+      if (automated) {
+        await pauseAutoRun(`${failedInspection.providerName} 状态检查失败。`, {
+          meta: failedInspection.error || '请检查该 AI 页面是否仍可读取。',
+        });
+      } else {
+        enterRoundPartialError(`${failedInspection.providerName} 状态检查失败。`, {
+          meta: failedInspection.error || '你可以继续等待、跳过该 AI，或检查网页后重试。',
+          resumeAction: 'resume-waiting',
+        });
+      }
       return;
     }
 
-    const settledResults = inspection.results.map((result) => {
-      const latestReplyText = String(result.latestReplyText || '');
-      const previous = busyStableTracker.get(result.paneId) || {
-        latestReplyText: '',
-        unchangedSince: 0,
-      };
-
-      let unchangedSince = 0;
-      if (result.busy && result.hasReply && latestReplyText) {
-        unchangedSince = previous.latestReplyText === latestReplyText
-          ? (previous.unchangedSince || Date.now())
-          : Date.now();
-      }
-
-      busyStableTracker.set(result.paneId, {
-        latestReplyText,
-        unchangedSince,
-      });
-
-      const busyStableMs = unchangedSince > 0 ? Date.now() - unchangedSince : 0;
-      const isEffectivelyCompleted = !result.busy && result.hasReply;
-
-      return {
-        ...result,
-        busyStableMs,
-        isEffectivelyCompleted,
-      };
-    });
-
-    const completedCount = settledResults.filter((result) => result.isEffectivelyCompleted).length;
+    const {
+      settledResults,
+      completedCount,
+      stalledResults,
+    } = settleInspectionResults(inspection.results, busyStableTracker, Date.now(), BUSY_STALL_PAUSE_MS);
     setFeedback(`正在等待第 ${state.currentRoundNumber} 轮完成`, {
       meta: `已完成 ${completedCount} / ${paneIds.length}。`,
     });
 
-    const stalledPaneLabels = getBusyStallPaneLabels(settledResults);
+    const stalledPaneLabels = getBusyStallPaneLabels(stalledResults);
     if (stalledPaneLabels.length > 0) {
-      await pauseAutoRun(`第 ${state.currentRoundNumber} 轮长时间无进展。`, {
-        meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
-      });
+      if (automated) {
+        await pauseAutoRun(`第 ${state.currentRoundNumber} 轮长时间无进展。`, {
+          meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
+        });
+      } else {
+        enterRoundPartialError(`第 ${state.currentRoundNumber} 轮长时间无进展。`, {
+          meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
+          resumeAction: 'resume-waiting',
+        });
+      }
       return;
     }
 
@@ -1832,9 +2109,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
         captureResult = await ipcRenderer.invoke('capture-provider-round-results', { paneIds });
       } catch (error) {
         console.error('Failed to capture provider round results:', error);
-        await pauseAutoRun('本轮稳定结果抓取失败。', {
-          meta: error?.message || '你可以稍后继续自动运行。',
-        });
+        if (automated) {
+          await pauseAutoRun('本轮稳定结果抓取失败。', {
+            meta: error?.message || '你可以稍后继续自动运行。',
+          });
+        } else {
+          enterRoundPartialError('本轮稳定结果抓取失败。', {
+            meta: error?.message || '你可以稍后继续等待，或先跳过异常 AI。',
+            resumeAction: 'resume-waiting',
+          });
+        }
         return;
       }
 
@@ -1842,17 +2126,24 @@ async function pollRoundCompletion(token, paneIds, automated) {
         return;
       }
 
-      const missingPaneIds = paneIds.filter((paneId) => {
-        return !captureResult?.results?.some((result) => result?.paneId === paneId && result?.ok && String(result?.latestReplyText || '').trim());
-      });
+      const missingPaneIds = getMissingCapturedPaneIds(paneIds, captureResult?.results || []);
 
       if (!Array.isArray(captureResult?.results) || captureResult.results.length === 0 || !captureResult?.ok || missingPaneIds.length > 0) {
         const failedCapture = captureResult?.results?.find((result) => !result.ok);
-        await pauseAutoRun(failedCapture ? `${failedCapture.providerName} 最终结果抓取失败。` : '本轮稳定结果抓取失败。', {
-          meta: failedCapture?.error || (missingPaneIds.length > 0
-            ? '仍有 AI 未抓取到完整稳定结果，系统已暂停，避免把半截内容推进到下一轮。'
-            : '你可以稍后继续自动运行。'),
-        });
+        const failureMessage = failedCapture ? `${failedCapture.providerName} 最终结果抓取失败。` : '本轮稳定结果抓取失败。';
+        const failureMeta = failedCapture?.error || (missingPaneIds.length > 0
+          ? '仍有 AI 未抓取到完整稳定结果，系统已暂停，避免把半截内容推进到下一轮。'
+          : '你可以稍后继续自动运行。');
+        if (automated) {
+          await pauseAutoRun(failureMessage, {
+            meta: failureMeta,
+          });
+        } else {
+          enterRoundPartialError(failureMessage, {
+            meta: failureMeta,
+            resumeAction: 'resume-waiting',
+          });
+        }
         return;
       }
 
@@ -1862,6 +2153,17 @@ async function pollRoundCompletion(token, paneIds, automated) {
       }));
       applyProviderInspectionResults(completedResults);
       recordCompletedRound(captureResult.results);
+      clearFlowErrorStates();
+
+      const mode = getModeOption();
+      if (state.currentRoundNumber >= mode.totalRounds) {
+        await finishDiscussion({
+          automated,
+          finalResult: captureResult.results[0] || null,
+        });
+        return;
+      }
+
       state.consoleState = 'round-review';
       render();
 
@@ -1876,9 +2178,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
     }
 
     if (Date.now() - state.roundStartedAt >= AUTO_WAIT_TIMEOUT_MS) {
-      await pauseAutoRun(`第 ${state.currentRoundNumber} 轮等待超时。`, {
-        meta: '你可以继续自动运行、手动检查网页，或改为手动接管。',
-      });
+      if (automated) {
+        await pauseAutoRun(`第 ${state.currentRoundNumber} 轮等待超时。`, {
+          meta: '你可以继续自动运行、手动检查网页，或改为手动接管。',
+        });
+      } else {
+        enterRoundPartialError(`第 ${state.currentRoundNumber} 轮等待超时。`, {
+          meta: '你可以继续等待、检查网页，或跳过异常 AI 后继续推进。',
+          resumeAction: 'resume-waiting',
+        });
+      }
       return;
     }
 
@@ -1895,6 +2204,7 @@ async function startWaitingForCurrentRound(options = {}) {
     : getSilentPaneIds(paneIds);
 
   syncProviderTracks();
+  clearFlowErrorStates();
   state.expectedPaneIds = [...paneIds];
   state.roundStartedAt = Date.now();
   state.consoleState = 'round-waiting';
@@ -1946,7 +2256,15 @@ async function resumeAutoRun() {
   clearAutoPauseState();
 
   if (resumeAction === 'advance-next-round') {
+    restoreLatestCompletedRoundContext();
     await maybeAdvanceAutoRunAfterRound();
+    return;
+  }
+
+  if (resumeAction === 'submit-current-draft') {
+    await submitCurrentDraft({
+      automated: true,
+    });
     return;
   }
 
@@ -1972,6 +2290,8 @@ async function startAutoRun() {
   state.autoPauseMeta = '';
   state.lastRoundResults = [];
   state.roundHistory = [];
+  clearDraftContext();
+  clearFlowErrorStates();
   if (state.summarizerSelectionSource !== 'manual') {
     state.summarizerPaneId = '';
     state.summarizerProviderName = '';
@@ -1981,11 +2301,11 @@ async function startAutoRun() {
   state.currentRoundType = getRoundTypeLabel(1);
   resetAllProviderTrackStatuses();
   await generateRoundOneDraft();
-  if (state.consoleState !== 'draft-ready' || !state.draft.trim()) {
+  if (!isDraftReadyState() || !state.draft.trim()) {
     state.autoRunActive = false;
     return;
   }
-  await submitRoundOneDraft({ automated: true });
+  await submitCurrentDraft({ automated: true });
 }
 
 async function generateRoundOneDraft() {
@@ -1998,21 +2318,27 @@ async function generateRoundOneDraft() {
     return;
   }
 
+  state.currentRoundNumber = 1;
+  state.currentRoundType = getRoundTypeLabel(1);
+  state.consoleState = 'draft-preparing';
+  state.draft = '';
+  state.draftSent = false;
+  state.draftNeedsRefresh = false;
+  setDraftPaneIds(getSpeakingPaneIds());
+  state.draftPromptType = 'round-one';
+  clearFlowErrorStates();
+  render();
   setFeedback('正在生成首轮 Draft', {
     meta: '系统正在合并主题、模式和本轮补充',
   });
 
   state.draft = buildRoundOneDraft();
-  state.draftSent = false;
-  state.draftNeedsRefresh = false;
-  state.currentRoundNumber = 1;
-  state.currentRoundType = getRoundTypeLabel(1);
   state.consoleState = 'draft-ready';
   render();
-  sendTextUpdate(state.draft);
+  mirrorDraftToTargetPanes();
   focusPrimaryField();
   setFeedback('已生成首轮 Draft，可发送', {
-    meta: `将发送给 ${Math.max(getPaneEntries().length, 0)} 个参与 AI；发送前可继续修改`,
+    meta: `将发送给 ${Math.max(getDraftPaneIds().length, 0)} 个参与 AI；发送前可继续修改`,
   });
 }
 
@@ -2025,52 +2351,122 @@ async function regenerateDraft() {
     return;
   }
 
+  if (state.draftPromptType && state.draftPromptType !== 'round-one') {
+    await prepareGeneratedRoundDraft({
+      roundNumber: state.currentRoundNumber,
+      promptType: state.draftPromptType,
+      paneIds: getDraftPaneIds().length > 0 ? getDraftPaneIds() : getSpeakingPaneIds(),
+      resumeAction: state.draftPromptType === 'final-summary' ? 'confirm-summarizer' : 'prepare-next-round',
+    });
+    return;
+  }
+
   await generateRoundOneDraft();
 }
 
-async function submitRoundOneDraft(options = {}) {
+async function submitCurrentDraft(options = {}) {
+  const automated = Boolean(options.automated);
+  const paneIds = getDraftPaneIds();
+  const silentPaneIds = getSilentPaneIds(paneIds);
+
+  if (paneIds.length === 0) {
+    if (automated) {
+      await pauseAutoRun('当前没有可发送的目标 AI。', {
+        meta: '请先确认参与 AI 是否仍然存在，再重新生成本轮 Draft。',
+        resumeAction: 'submit-current-draft',
+      });
+    } else {
+      enterGlobalErrorState('当前没有可发送的目标 AI。', {
+        meta: '请先确认参与 AI 是否仍然存在，再重新生成本轮 Draft。',
+        resumeAction: 'submit-current-draft',
+      });
+    }
+    return;
+  }
+
   if (getPaneEntries().length === 0) {
-    setFeedback('当前没有可发送的 AI 面板。', {
-      error: true,
-      meta: '请先在设置里配置至少一个参与面板，再发送首轮 Draft。',
-    });
+    if (automated) {
+      await pauseAutoRun('当前没有可发送的 AI 面板。', {
+        meta: '请先在设置里配置至少一个参与面板，再发送本轮 Draft。',
+        resumeAction: 'submit-current-draft',
+      });
+    } else {
+      setFeedback('当前没有可发送的 AI 面板。', {
+        error: true,
+        meta: '请先在设置里配置至少一个参与面板，再发送首轮 Draft。',
+      });
+    }
     return;
   }
 
   if (!state.draft.trim()) {
-    setFeedback('当前 Draft 为空，无法发送。', {
-      error: true,
-      meta: '请先生成或补全首轮 Draft。',
-    });
-    focusPrimaryField();
+    if (automated) {
+      await pauseAutoRun('当前 Draft 为空，无法发送。', {
+        meta: '请先生成或补全当前轮 Draft。',
+        resumeAction: 'submit-current-draft',
+      });
+    } else {
+      setFeedback('当前 Draft 为空，无法发送。', {
+        error: true,
+        meta: '请先生成或补全首轮 Draft。',
+      });
+      focusPrimaryField();
+    }
     return;
   }
 
-  try {
-    await ipcRenderer.invoke('send-text-update', state.draft);
-    await ipcRenderer.invoke('submit-message');
-    state.draftSent = true;
-    if (options.automated) {
-      await startWaitingForCurrentRound({
-        paneIds: getSpeakingPaneIds(),
-        automated: true,
-        feedbackMessage: '首轮已自动发送。',
-        feedbackMeta: '系统正在等待首轮完成。',
-      });
-      return;
-    }
+  state.consoleState = 'round-dispatching';
+  state.draftSent = true;
+  state.draftNeedsRefresh = false;
+  clearFlowErrorStates();
+  setDispatchingTrackStatuses(paneIds, silentPaneIds);
+  render();
 
-    render();
-    setFeedback('首轮已发送。', {
-      meta: '如果还想继续补充，可以修改后再次发送。后续多轮自动等待我们已经开始接入。',
-    });
+  let submitResult;
+  try {
+    await mirrorDraftToTargetPanesNow();
+    submitResult = await ipcRenderer.invoke('submit-message-to-panes', { paneIds });
   } catch (error) {
-    console.error('Failed to submit round one draft:', error);
-    setFeedback('发送首轮失败。', {
-      error: true,
-      meta: error?.message || '提交消息到各个 AI 面板时发生错误。',
-    });
+    console.error('Failed to submit current draft:', error);
+    if (automated) {
+      await pauseAutoRun(`第 ${state.currentRoundNumber} 轮发送失败。`, {
+        meta: error?.message || '提交消息到目标 AI 面板时发生错误。',
+        resumeAction: 'submit-current-draft',
+      });
+    } else {
+      enterGlobalErrorState(`第 ${state.currentRoundNumber} 轮发送失败。`, {
+        meta: error?.message || '提交消息到目标 AI 面板时发生错误。',
+        resumeAction: 'submit-current-draft',
+      });
+    }
+    return;
   }
+
+  if (!submitResult?.ok) {
+    if (automated) {
+      await pauseAutoRun(submitResult?.message || `第 ${state.currentRoundNumber} 轮发送失败。`, {
+        meta: '请检查各 AI 输入框是否仍可交互。',
+        resumeAction: 'submit-current-draft',
+      });
+    } else {
+      enterGlobalErrorState(submitResult?.message || `第 ${state.currentRoundNumber} 轮发送失败。`, {
+        meta: '请检查各 AI 输入框是否仍可交互。',
+        resumeAction: 'submit-current-draft',
+      });
+    }
+    return;
+  }
+
+  const sentLabel = state.currentRoundNumber === 1 ? '首轮' : `第 ${state.currentRoundNumber} 轮`;
+  await startWaitingForCurrentRound({
+    paneIds,
+    silentPaneIds,
+    automated,
+    feedbackMessage: `${sentLabel}${automated ? '已自动发送。' : '已发送。'}`,
+    feedbackMeta: automated
+      ? '系统正在等待本轮完成。'
+      : '系统正在等待本轮完成；完成后可进入下一阶段。',
+  });
 }
 
 async function handlePrimaryAction() {
@@ -2079,10 +2475,40 @@ async function handlePrimaryAction() {
     return;
   }
 
-  if (state.consoleState === 'draft-ready') {
-    await submitRoundOneDraft({
+  if (isFinishedState()) {
+    resetConsoleToIdle();
+    return;
+  }
+
+  if (isGlobalErrorState()) {
+    await retryGlobalErrorStep();
+    return;
+  }
+
+  if (isPartialErrorState()) {
+    await continueCurrentRoundAfterError();
+    return;
+  }
+
+  if (isSummarizerSelectingState()) {
+    await confirmSummarizerAndPrepareFinalRound();
+    return;
+  }
+
+  if (isDraftReadyState()) {
+    await submitCurrentDraft({
       automated: state.runMode === 'auto',
     });
+    return;
+  }
+
+  if (isReviewState()) {
+    if (state.runMode === 'auto') {
+      await maybeAdvanceAutoRunAfterRound();
+      return;
+    }
+
+    await prepareNextManualRound();
     return;
   }
 
@@ -2157,13 +2583,17 @@ async function triggerPrivateNewChat() {
 }
 
 function updateDockValue(nextValue) {
-  if (state.consoleState === 'draft-ready') {
+  if (isDraftReadyState()) {
     state.draft = nextValue;
     state.draftSent = false;
     state.draftNeedsRefresh = false;
     render();
-    sendTextUpdate(state.draft);
+    mirrorDraftToTargetPanes();
     return;
+  }
+
+  if (isFinishedState()) {
+    resetConsoleToIdle({ silentFeedback: true });
   }
 
   state.topic = nextValue;
@@ -2282,7 +2712,7 @@ refs.dockInput.addEventListener('keydown', (event) => {
 
 refs.topicInput.addEventListener('input', (event) => {
   state.topic = event.target.value;
-  if (state.consoleState === 'draft-ready') {
+  if (isDraftReadyState()) {
     markDraftStale('已更新讨论主题');
   }
   render();
@@ -2291,7 +2721,7 @@ refs.topicInput.addEventListener('input', (event) => {
 
 refs.roundNoteInput.addEventListener('input', (event) => {
   state.roundNote = event.target.value;
-  if (state.consoleState === 'draft-ready') {
+  if (isDraftReadyState()) {
     markDraftStale('已更新本轮补充');
   }
   render();
@@ -2303,19 +2733,21 @@ refs.draftInput.addEventListener('input', (event) => {
   state.draftSent = false;
   state.draftNeedsRefresh = false;
   render();
-  sendTextUpdate(state.draft);
+  mirrorDraftToTargetPanes();
 });
 
 refs.draftInput.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault();
-    submitRoundOneDraft();
+    submitCurrentDraft({
+      automated: state.runMode === 'auto',
+    });
   }
 });
 
 refs.resetRulesBtn.addEventListener('click', () => {
   state.stickyRuleIds = [...DEFAULT_STICKY_RULE_IDS];
-  if (state.consoleState === 'draft-ready') {
+  if (isDraftReadyState()) {
     markDraftStale('已恢复默认规则');
   }
   render();

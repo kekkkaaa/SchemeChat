@@ -114,6 +114,14 @@ const SUMMARIZER_PROVIDER_PRIORITY = {
   grok: 1,
 };
 
+const SUMMARIZER_PROVIDER_ALIASES = {
+  chatgpt: ['chatgpt', 'gpt'],
+  claude: ['claude'],
+  gemini: ['gemini'],
+  perplexity: ['perplexity'],
+  grok: ['grok'],
+};
+
 function normalizeTextBlock(text) {
   return String(text || '')
     .replace(/\u200B/g, '')
@@ -158,6 +166,136 @@ function chooseAutoSummarizerPaneId(results, panes, priorityMap) {
     return paneFallbackId;
   }
 
+  if (normalizedResults.length === 1) {
+    return normalizedResults[0]?.paneId || paneFallbackId;
+  }
+
+  const normalizedPanes = Array.isArray(panes) ? panes.filter((pane) => pane?.id) : [];
+  const validVotes = normalizedResults
+    .map((result) => extractSummarizerVotePaneId(result?.latestReplyText || '', normalizedPanes))
+    .filter(Boolean);
+
+  if (normalizedResults.length === 2) {
+    if (validVotes.length === 0) {
+      return getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
+    }
+
+    return new Set(validVotes).size === 1 && validVotes.length === 2
+      ? validVotes[0]
+      : getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
+  }
+
+  if (validVotes.length > 0) {
+    const voteCounts = validVotes.reduce((counts, paneId) => {
+      counts.set(paneId, (counts.get(paneId) || 0) + 1);
+      return counts;
+    }, new Map());
+    const sortedVotes = [...voteCounts.entries()].sort((left, right) => {
+      if (left[1] !== right[1]) {
+        return right[1] - left[1];
+      }
+
+      return String(left[0]).localeCompare(String(right[0]));
+    });
+
+    const [topVote, secondVote] = sortedVotes;
+    if (topVote && (!secondVote || topVote[1] > secondVote[1])) {
+      return topVote[0];
+    }
+
+    return '';
+  }
+
+  return getProviderPriorityFallbackPaneId(normalizedResults, priorityMap, paneFallbackId);
+}
+
+function normalizeSummarizerVoteText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/\r/g, '')
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, ' ')
+    .trim();
+}
+
+function extractVoteCandidateSegments(text) {
+  const rawText = String(text || '');
+  if (!rawText.trim()) {
+    return [];
+  }
+
+  const keywordPatterns = [
+    '总结者',
+    '总结',
+    '推荐',
+    '建议',
+    '负责总结',
+    '做最终总结',
+    '最终总结',
+    'summarizer',
+    'summary',
+  ];
+
+  return rawText
+    .split(/\r?\n|。|！|!|？|\?|；|;/)
+    .map((segment) => normalizeSummarizerVoteText(segment))
+    .filter(Boolean)
+    .filter((segment) => keywordPatterns.some((pattern) => segment.includes(pattern)));
+}
+
+function getPaneVoteAliases(pane) {
+  const providerKey = String(pane?.providerKey || '').trim().toLowerCase();
+  const providerName = normalizeSummarizerVoteText(pane?.providerName || '');
+  const providerAliases = providerKey ? (SUMMARIZER_PROVIDER_ALIASES[providerKey] || [providerKey]) : [];
+
+  return [...new Set([
+    providerName,
+    ...providerAliases.map((alias) => normalizeSummarizerVoteText(alias)),
+  ].filter(Boolean))];
+}
+
+function extractSummarizerVotePaneId(text, panes) {
+  const candidateSegments = extractVoteCandidateSegments(text);
+  if (candidateSegments.length === 0) {
+    return '';
+  }
+
+  for (const segment of candidateSegments) {
+    const matches = (Array.isArray(panes) ? panes : [])
+      .map((pane) => {
+        const indexes = getPaneVoteAliases(pane)
+          .map((alias) => segment.indexOf(alias))
+          .filter((index) => index >= 0);
+
+        if (indexes.length === 0) {
+          return null;
+        }
+
+        return {
+          paneId: pane.id,
+          firstIndex: Math.min(...indexes),
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.firstIndex - right.firstIndex);
+
+    if (matches.length === 0) {
+      continue;
+    }
+
+    if (matches.length > 1 && matches[0].firstIndex === matches[1].firstIndex) {
+      continue;
+    }
+
+    return matches[0]?.paneId || '';
+  }
+
+  return '';
+}
+
+function getProviderPriorityFallbackPaneId(results, priorityMap, paneFallbackId) {
+  const normalizedResults = Array.isArray(results)
+    ? results.filter((result) => result?.paneId)
+    : [];
   const sortedResults = [...normalizedResults].sort((left, right) => {
     const leftPriority = priorityMap?.[left.providerKey] || 0;
     const rightPriority = priorityMap?.[right.providerKey] || 0;
@@ -282,6 +420,314 @@ function buildStableMaterialSnapshot(text, maxLength = 2200, maxBlocks = 18) {
   return `${snapshot.slice(0, maxLength).trimEnd()}...`;
 }
 
+function splitMaterialBlocks(text, maxBlocks = 8) {
+  const normalizedText = normalizeTextBlock(text)
+    .replace(/(?<!\n)(\d+[.)、]\s*)/g, '\n$1')
+    .replace(/(?<!\n)([-*•]\s+)/g, '\n$1');
+
+  if (!normalizedText) {
+    return [];
+  }
+
+  const seen = new Set();
+  const uniqueBlocks = [];
+
+  normalizedText
+    .split('\n')
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .forEach((block) => {
+      const normalizedBlock = block.replace(/\s+/g, ' ').trim();
+      if (!normalizedBlock || seen.has(normalizedBlock)) {
+        return;
+      }
+
+      seen.add(normalizedBlock);
+      uniqueBlocks.push(normalizedBlock);
+    });
+
+  return uniqueBlocks.slice(0, maxBlocks);
+}
+
+function stripMaterialBlockPrefix(block) {
+  return String(block || '')
+    .replace(/^\d+[.)、]\s*/, '')
+    .replace(/^[-*•]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncateMaterialLine(text, maxLength = 120) {
+  const normalizedText = stripMaterialBlockPrefix(text);
+  if (normalizedText.length <= maxLength) {
+    return normalizedText;
+  }
+
+  return `${normalizedText.slice(0, maxLength).trimEnd()}...`;
+}
+
+function dedupeMaterialLines(lines = [], maxItems = 4) {
+  const uniqueLines = [];
+  const seen = new Set();
+
+  lines.forEach((line) => {
+    const normalizedLine = truncateMaterialLine(line, 140);
+    if (!normalizedLine) {
+      return;
+    }
+
+    const dedupeKey = normalizedLine.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+
+    const alreadyCovered = uniqueLines.some((existingLine) => {
+      return existingLine.includes(normalizedLine) || normalizedLine.includes(existingLine);
+    });
+
+    if (alreadyCovered) {
+      return;
+    }
+
+    seen.add(dedupeKey);
+    uniqueLines.push(normalizedLine);
+  });
+
+  return uniqueLines.slice(0, maxItems);
+}
+
+function classifyMaterialBlock(block) {
+  const normalizedBlock = stripMaterialBlockPrefix(block);
+  if (!normalizedBlock) {
+    return 'other';
+  }
+
+  if (/(待确认|需确认|需要确认|待验证|需验证|需要验证|仍需确认|仍需验证|不确定|是否|能否|可否|前提|条件|边界)/.test(normalizedBlock)) {
+    return 'open';
+  }
+
+  if (/(分歧|异议|争议|冲突|质疑|反对|不同意|不认同|保留意见|漏洞|问题|不足|副作用|风险|限制)/.test(normalizedBlock)) {
+    return 'disagreement';
+  }
+
+  if (/(共识|一致|都认为|结论|建议|方案|推荐|优先|应该|保留|可行|收敛|方向)/.test(normalizedBlock)) {
+    return 'consensus';
+  }
+
+  return 'other';
+}
+
+function fillMaterialSection(targetItems, fallbackItems, maxItems, usedItems) {
+  while (targetItems.length < maxItems && fallbackItems.length > 0) {
+    const nextItem = fallbackItems.shift();
+    const dedupeKey = String(nextItem || '').toLowerCase();
+    if (!nextItem || usedItems.has(dedupeKey)) {
+      continue;
+    }
+
+    usedItems.add(dedupeKey);
+    targetItems.push(nextItem);
+  }
+}
+
+function parseStructuredMaterialPackText(text) {
+  const sections = {
+    consensus: [],
+    disagreements: [],
+    openQuestions: [],
+    quotes: [],
+  };
+  let currentSection = '';
+
+  String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      if (line === '当前共识：') {
+        currentSection = 'consensus';
+        return;
+      }
+      if (line === '当前剩余分歧：') {
+        currentSection = 'disagreements';
+        return;
+      }
+      if (line === '待确认点：') {
+        currentSection = 'openQuestions';
+        return;
+      }
+      if (line === '必要引用：') {
+        currentSection = 'quotes';
+        return;
+      }
+
+      if (!currentSection || !line.startsWith('- ')) {
+        return;
+      }
+
+      const normalizedLine = truncateMaterialLine(line.slice(2), currentSection === 'quotes' ? 90 : 120);
+      if (!normalizedLine) {
+        return;
+      }
+
+      sections[currentSection].push(normalizedLine);
+    });
+
+  return sections;
+}
+
+function collectRoundMaterialItems(roundEntry, getPaneEntryById, isLatestRound) {
+  const consensusItems = [];
+  const disagreementItems = [];
+  const openQuestionItems = [];
+  const fallbackItems = [];
+  const quoteItems = [];
+
+  const existingMaterialPackText = String(roundEntry?.materialPack?.latestReplyText || '').trim();
+  if (existingMaterialPackText) {
+    const sections = parseStructuredMaterialPackText(existingMaterialPackText);
+    consensusItems.push(...sections.consensus);
+    disagreementItems.push(...sections.disagreements);
+    openQuestionItems.push(...sections.openQuestions);
+    if (isLatestRound) {
+      quoteItems.push(...sections.quotes);
+    }
+    return {
+      consensusItems,
+      disagreementItems,
+      openQuestionItems,
+      fallbackItems,
+      quoteItems,
+    };
+  }
+
+  (Array.isArray(roundEntry?.results) ? roundEntry.results : []).forEach((result) => {
+    const providerName = result?.providerName || getPaneEntryById(result?.paneId)?.providerName || 'Unknown AI';
+    const blocks = splitMaterialBlocks(buildStableMaterialSnapshot(result?.latestReplyText || '', 1400, 20), 10);
+    blocks.forEach((block, blockIndex) => {
+      const normalizedBlock = truncateMaterialLine(block, 120);
+      if (!normalizedBlock) {
+        return;
+      }
+
+      if (isLatestRound && blockIndex < 2) {
+        quoteItems.push(`${providerName}：${truncateMaterialLine(normalizedBlock, 90)}`);
+      }
+
+      switch (classifyMaterialBlock(normalizedBlock)) {
+        case 'consensus':
+          consensusItems.push(normalizedBlock);
+          break;
+        case 'disagreement':
+          disagreementItems.push(normalizedBlock);
+          break;
+        case 'open':
+          openQuestionItems.push(normalizedBlock);
+          break;
+        default:
+          fallbackItems.push(normalizedBlock);
+          break;
+      }
+    });
+  });
+
+  return {
+    consensusItems,
+    disagreementItems,
+    openQuestionItems,
+    fallbackItems,
+    quoteItems,
+  };
+}
+
+function buildStructuredMaterialPack(config) {
+  const roundHistory = Array.isArray(config?.roundHistory) ? config.roundHistory : [];
+  const getPaneEntryById = typeof config?.getPaneEntryById === 'function' ? config.getPaneEntryById : () => null;
+  if (roundHistory.length === 0) {
+    return [];
+  }
+
+  const consensusItems = [];
+  const disagreementItems = [];
+  const openQuestionItems = [];
+  const fallbackItems = [];
+  const quoteItems = [];
+
+  roundHistory.forEach((roundEntry, roundIndex) => {
+    const isLatestRound = roundIndex === roundHistory.length - 1;
+    const materialItems = collectRoundMaterialItems(roundEntry, getPaneEntryById, isLatestRound);
+    consensusItems.push(...materialItems.consensusItems);
+    disagreementItems.push(...materialItems.disagreementItems);
+    openQuestionItems.push(...materialItems.openQuestionItems);
+    fallbackItems.push(...materialItems.fallbackItems);
+    quoteItems.push(...materialItems.quoteItems);
+  });
+
+  const consensus = dedupeMaterialLines(consensusItems, 4);
+  const disagreements = dedupeMaterialLines(disagreementItems, 4);
+  const openQuestions = dedupeMaterialLines(openQuestionItems, 4);
+  const fallback = dedupeMaterialLines(fallbackItems, 8);
+  const usedItems = new Set([
+    ...consensus.map((item) => item.toLowerCase()),
+    ...disagreements.map((item) => item.toLowerCase()),
+    ...openQuestions.map((item) => item.toLowerCase()),
+  ]);
+
+  fillMaterialSection(consensus, fallback, 3, usedItems);
+  fillMaterialSection(disagreements, fallback, 3, usedItems);
+  fillMaterialSection(openQuestions, fallback, 3, usedItems);
+
+  const keyQuotes = dedupeMaterialLines(quoteItems, 4);
+  const sections = [];
+
+  if (consensus.length > 0) {
+    sections.push('当前共识：');
+    consensus.forEach((item) => {
+      sections.push(`- ${item}`);
+    });
+  }
+
+  if (disagreements.length > 0) {
+    sections.push('');
+    sections.push('当前剩余分歧：');
+    disagreements.forEach((item) => {
+      sections.push(`- ${item}`);
+    });
+  }
+
+  if (openQuestions.length > 0) {
+    sections.push('');
+    sections.push('待确认点：');
+    openQuestions.forEach((item) => {
+      sections.push(`- ${item}`);
+    });
+  }
+
+  if (keyQuotes.length > 0) {
+    sections.push('');
+    sections.push('必要引用：');
+    keyQuotes.forEach((item) => {
+      sections.push(`- ${item}`);
+    });
+  }
+
+  const latestReplyText = sections.join('\n').trim();
+  if (!latestReplyText) {
+    return [];
+  }
+
+  return [
+    {
+      paneId: '__structured_material_pack__',
+      providerKey: 'system',
+      providerName: 'Structured Material Pack',
+      label: '结构化材料包',
+      latestReplyText,
+      materialType: 'structured-pack',
+    },
+  ];
+}
+
 function buildLatestRoundMaterialSources(config) {
   const lastRoundResults = Array.isArray(config?.lastRoundResults) ? config.lastRoundResults : [];
   const getPaneEntryById = typeof config?.getPaneEntryById === 'function' ? config.getPaneEntryById : () => null;
@@ -289,8 +735,8 @@ function buildLatestRoundMaterialSources(config) {
   return lastRoundResults
     .map((result) => {
       const providerName = result?.providerName || getPaneEntryById(result?.paneId)?.providerName || 'Unknown AI';
-      const summaryText = buildStableMaterialSnapshot(result?.latestReplyText || '', 2200, 18);
-      if (!summaryText) {
+      const originalReplyText = normalizeTextBlock(result?.latestReplyText || '');
+      if (!originalReplyText) {
         return null;
       }
 
@@ -299,38 +745,14 @@ function buildLatestRoundMaterialSources(config) {
         providerKey: result?.providerKey || '',
         providerName,
         label: providerName,
-        latestReplyText: summaryText,
+        latestReplyText: originalReplyText,
       };
     })
     .filter(Boolean);
 }
 
 function buildCumulativeRoundMaterialSources(config) {
-  const roundHistory = Array.isArray(config?.roundHistory) ? config.roundHistory : [];
-  const getPaneEntryById = typeof config?.getPaneEntryById === 'function' ? config.getPaneEntryById : () => null;
-  const sources = [];
-
-  roundHistory.forEach((roundEntry) => {
-    (Array.isArray(roundEntry?.results) ? roundEntry.results : []).forEach((result) => {
-      const providerName = result?.providerName || getPaneEntryById(result?.paneId)?.providerName || 'Unknown AI';
-      const summaryText = buildStableMaterialSummary(result?.latestReplyText || '');
-      if (!summaryText) {
-        return;
-      }
-
-      sources.push({
-        paneId: result?.paneId || '',
-        providerKey: result?.providerKey || '',
-        providerName,
-        label: `Round ${roundEntry.roundNumber} / ${providerName}`,
-        latestReplyText: summaryText,
-        roundNumber: roundEntry.roundNumber,
-        roundType: roundEntry.roundType,
-      });
-    });
-  });
-
-  return sources;
+  return buildLatestRoundMaterialSources(config);
 }
 
 function shouldIncludeSelfSourcesForPrompt(promptType) {
@@ -380,19 +802,10 @@ function getAutoPromptType(roundNumber, modeId) {
 }
 
 function getAutoRoundSourceMaxLength(promptType) {
-  if (['compression', 'revision', 'confirmation', 'final-summary'].includes(promptType)) {
-    return 700;
-  }
-
-  return 2200;
+  return null;
 }
 
 function getAutoRoundSources(config) {
-  const promptType = String(config?.promptType || '').trim();
-  if (['compression', 'revision', 'confirmation', 'final-summary'].includes(promptType)) {
-    return buildCumulativeRoundMaterialSources(config);
-  }
-
   return buildLatestRoundMaterialSources(config);
 }
 
@@ -410,6 +823,7 @@ module.exports = {
   STICKY_RULE_SUMMARIES,
   SUMMARIZER_PROVIDER_PRIORITY,
   buildRoundOneDraftText,
+  buildStructuredMaterialPack,
   chooseAutoSummarizerPaneId,
   getAutoPromptType,
   getAutoRoundSourceMaxLength,
