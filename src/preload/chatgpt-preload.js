@@ -13,7 +13,11 @@ const {
   delay,
   setupIPCListeners,
   setupInputScanner,
+  createUIControls,
+  setupViewInfoListener,
+  setupSupersizeListener,
   waitForCondition,
+  waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
@@ -33,6 +37,13 @@ const CHATGPT_MODEL_MENU_PATTERNS = [
   '模型',
   '模式',
 ];
+const CHATGPT_UI_OPTIONS = {
+  topBarInset: {
+    observeDomMutations: false,
+    observeScroll: false,
+    delayedSyncDelays: [300, 1200],
+  },
+};
 
 let inputElement = null;
 let appendBaseText = null;
@@ -245,3 +256,17 @@ setupInputScanner(
   (el) => { inputElement = el; },
   null
 );
+
+const getViewInfo = setupViewInfoListener((viewInfo) => {
+  window.polygptGetViewInfo = () => viewInfo;
+  createUIControls(viewInfo, CHATGPT_UI_OPTIONS);
+});
+
+setupSupersizeListener();
+
+waitForDOM(() => {
+  const viewInfo = getViewInfo();
+  if (viewInfo) {
+    createUIControls(viewInfo, CHATGPT_UI_OPTIONS);
+  }
+});

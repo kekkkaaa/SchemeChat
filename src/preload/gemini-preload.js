@@ -8,7 +8,11 @@ const {
   delay,
   setupIPCListeners,
   setupInputScanner,
+  createUIControls,
+  setupViewInfoListener,
+  setupSupersizeListener,
   waitForCondition,
+  waitForDOM,
 } = require('./shared-preload-utils');
 
 const config = loadConfig();
@@ -27,6 +31,13 @@ const GEMINI_NAV_MENU_SELECTORS = [
   'button[aria-label*="menu"]',
   'button[title*="Menu"]',
 ];
+const GEMINI_UI_OPTIONS = {
+  topBarInset: {
+    observeDomMutations: false,
+    observeScroll: false,
+    delayedSyncDelays: [300, 1200],
+  },
+};
 
 let inputElement = null;
 let lastSubmittedText = '';
@@ -460,3 +471,17 @@ setupInputScanner(
   (element) => { inputElement = element; },
   (selector) => findGeminiInput(findElement(selector))
 );
+
+const getViewInfo = setupViewInfoListener((viewInfo) => {
+  window.polygptGetViewInfo = () => viewInfo;
+  createUIControls(viewInfo, GEMINI_UI_OPTIONS);
+});
+
+setupSupersizeListener();
+
+waitForDOM(() => {
+  const viewInfo = getViewInfo();
+  if (viewInfo) {
+    createUIControls(viewInfo, GEMINI_UI_OPTIONS);
+  }
+});

@@ -40,7 +40,7 @@ const {
 const state = {
   isPanelExpanded: false,
   consoleState: 'idle',
-  runMode: 'manual',
+  runMode: 'auto',
   modeId: 'standard-4',
   stickyRuleIds: [...DEFAULT_STICKY_RULE_IDS],
   quickPromptIds: [],
