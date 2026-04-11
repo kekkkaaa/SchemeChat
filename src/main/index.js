@@ -554,6 +554,22 @@ app.on('ready', async () => {
     return false;
   });
 
+  ipcMain.handle('open-help-modal', async () => {
+    if (mainWindow && typeof mainWindow.openHelpModal === 'function') {
+      mainWindow.openHelpModal();
+      return true;
+    }
+    return false;
+  });
+
+  ipcMain.handle('close-help-modal', async () => {
+    if (mainWindow && typeof mainWindow.closeHelpModal === 'function') {
+      mainWindow.closeHelpModal();
+      return true;
+    }
+    return false;
+  });
+
   ipcMain.handle('get-settings-state', async () => {
     if (mainWindow && typeof mainWindow.getLayoutSettingsState === 'function') {
       return mainWindow.getLayoutSettingsState();

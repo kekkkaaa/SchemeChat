@@ -31,10 +31,10 @@ SchemeChat focuses on coordinated multi-provider discussion in a split workspace
 
 Manual downloads are available for all platforms:
 
-- **macOS:** [schemechat.dmg](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.dmg)
-- **Windows:** [schemechat.exe](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.exe)
-- **Linux (AppImage):** [schemechat.AppImage](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.AppImage)
-- **Linux (Debian):** [schemechat.deb](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.deb)
+- **macOS:** [schemechat.dmg](https://github.com/kekkkaaa/SchemeChat/releases/latest/download/schemechat.dmg)
+- **Windows:** [schemechat.exe](https://github.com/kekkkaaa/SchemeChat/releases/latest/download/schemechat.exe)
+- **Linux (AppImage):** [schemechat.AppImage](https://github.com/kekkkaaa/SchemeChat/releases/latest/download/schemechat.AppImage)
+- **Linux (Debian):** [schemechat.deb](https://github.com/kekkkaaa/SchemeChat/releases/latest/download/schemechat.deb)
 
 ### macOS Installation Note
 

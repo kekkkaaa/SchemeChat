@@ -1,0 +1,190 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.modal-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ─── Header ─── */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 13px;
+  border-bottom: 1px solid #e5e5e7;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.modal-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111;
+}
+
+.close-btn {
+  -webkit-app-region: no-drag;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: #ebebed;
+  color: #555;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.close-btn:hover {
+  background: #d0d0d2;
+}
+
+/* ─── Body ─── */
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ─── Section ─── */
+.help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #222;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.badge-codex  { background: #1a1a1a; }
+.badge-claude { background: #d97706; }
+
+.desc {
+  font-size: 12px;
+  color: #555;
+  line-height: 1.6;
+}
+
+.ic {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  background: #f0f0f2;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #333;
+}
+
+/* ─── Code block ─── */
+.code-wrap {
+  position: relative;
+}
+
+.code-block {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  padding: 11px 14px;
+  border-radius: 7px;
+  white-space: pre;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  background: rgba(255,255,255,0.1);
+  color: #cdd6f4;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.copy-btn:hover  { background: rgba(255,255,255,0.2); }
+.copy-btn.copied {
+  background: rgba(166,227,161,0.25);
+  color: #a6e3a1;
+  border-color: rgba(166,227,161,0.35);
+}
+
+/* ─── Tools list ─── */
+.tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  border-left: 3px solid transparent;
+}
+
+.tool.read  { background: #f0faf0; border-left-color: #4caf50; }
+.tool.write { background: #fff8f0; border-left-color: #f59e0b; }
+
+.tool-name {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #222;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tool-desc {
+  font-size: 11px;
+  color: #666;
+}
+
+.tip {
+  font-size: 11px;
+  color: #999;
+  margin-top: 2px;
+}

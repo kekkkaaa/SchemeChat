@@ -985,6 +985,60 @@ async function createWindow() {
     }
   }
 
+  // ─── Help Modal ───────────────────────────────────────────────
+  let helpWindow = null;
+
+  function openHelpModal() {
+    if (helpWindow && !helpWindow.isDestroyed()) {
+      helpWindow.focus();
+      return helpWindow;
+    }
+
+    helpWindow = new BrowserWindow({
+      parent: mainWindow,
+      modal: true,
+      show: false,
+      width: 520,
+      height: 640,
+      minWidth: 420,
+      minHeight: 480,
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      frame: false,
+      backgroundColor: '#ffffff',
+      skipTaskbar: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
+    });
+
+    helpWindow.removeMenu();
+    helpWindow.setMenuBarVisibility(false);
+    helpWindow.loadFile(path.join(__dirname, '../renderer/help-modal.html'));
+    helpWindow.once('ready-to-show', () => {
+      if (!helpWindow || helpWindow.isDestroyed()) return;
+      helpWindow.center();
+      helpWindow.show();
+      helpWindow.focus();
+    });
+
+    helpWindow.on('closed', () => {
+      helpWindow = null;
+    });
+
+    return helpWindow;
+  }
+
+  function closeHelpModal() {
+    if (helpWindow && !helpWindow.isDestroyed()) {
+      helpWindow.close();
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+
   const initialLayout = loadLayoutConfig();
   layoutMode = initialLayout.layoutMode;
   paneStates = initialLayout.panes.map((paneConfig) => createPaneState(paneConfig));
@@ -1045,6 +1099,8 @@ async function createWindow() {
   mainWindow.resizeDiscussionConsoleBy = resizeDiscussionConsoleBy;
   mainWindow.openSettingsModal = openSettingsModal;
   mainWindow.closeSettingsModal = closeSettingsModal;
+  mainWindow.openHelpModal = openHelpModal;
+  mainWindow.closeHelpModal = closeHelpModal;
 
   return mainWindow;
 }

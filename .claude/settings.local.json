@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://127.0.0.1:3769/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"claude-code-test\",\"version\":\"0.1.0\"}}}')",
+      "mcp__schemechat-local__get_workspace_snapshot",
+      "mcp__schemechat-local__inspect_round_status",
+      "mcp__schemechat-local__inject_text_to_panes",
+      "mcp__schemechat-local__submit_message_to_panes",
+      "mcp__schemechat-local__capture_latest_replies"
+    ]
+  }
+}
