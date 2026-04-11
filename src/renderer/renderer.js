@@ -2893,6 +2893,15 @@ refs.zoomOutBtn.addEventListener('click', () => {
   });
 });
 
+ipcRenderer.on('provider-warning', (event, payload) => {
+  if (payload?.source === 'gemini' && payload?.code === 'unsafe-login-blocked') {
+    setFeedback('Gemini 登录被 Google 拦截。', {
+      error: true,
+      meta: '这是内嵌浏览器首登限制，不是 Draft 注入失败。若当前没有现成 Gemini 会话，请先跳过 Gemini 或改用其他 Provider。',
+    });
+  }
+});
+
 ipcRenderer.on('selector-error', (event, payload) => {
   setFeedback(`${payload?.source || '某个面板'} 注入失败。`, {
     error: true,

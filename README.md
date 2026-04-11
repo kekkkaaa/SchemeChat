@@ -1,15 +1,15 @@
 <div align="center">
-  <img src="assets/icons/original_white.png" alt="PolyGPT Logo" width="400">
+  <img src="assets/icons/original_white.png" alt="SchemeChat Logo" width="400">
 </div>
 
-# PolyGPT
+# SchemeChat
 
 Interact with multiple AI assistants simultaneously in a split-screen interface. 
 Type once and send your prompts to ChatGPT, Claude, Gemini, and Perplexity at the same time.
 
 ## Demo
 
-![PolyGPT Demo](https://storage.googleapis.com/polygpt-assets/demo.gif)
+SchemeChat focuses on coordinated multi-provider discussion in a split workspace.
 
 ## Privacy
 
@@ -29,12 +29,12 @@ Type once and send your prompts to ChatGPT, Claude, Gemini, and Perplexity at th
 
 ## Download
 
-Pre-built binaries are available for all platforms:
+Manual downloads are available for all platforms:
 
-- **macOS:** [polygpt.dmg](https://github.com/ncvgl/polygpt/releases/latest/download/polygpt.dmg)
-- **Windows:** [polygpt.exe](https://github.com/ncvgl/polygpt/releases/latest/download/polygpt.exe)
-- **Linux (AppImage):** [polygpt.AppImage](https://github.com/ncvgl/polygpt/releases/latest/download/polygpt.AppImage)
-- **Linux (Debian):** [polygpt.deb](https://github.com/ncvgl/polygpt/releases/latest/download/polygpt.deb)
+- **macOS:** [schemechat.dmg](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.dmg)
+- **Windows:** [schemechat.exe](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.exe)
+- **Linux (AppImage):** [schemechat.AppImage](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.AppImage)
+- **Linux (Debian):** [schemechat.deb](https://github.com/zixinYa/SchemeChat/releases/latest/download/schemechat.deb)
 
 ### macOS Installation Note
 

@@ -410,6 +410,20 @@ function clampNumber(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getRuntimeWindowIconPath() {
+  const iconsDir = path.join(__dirname, '../../assets/icons');
+
+  if (process.platform === 'win32') {
+    return path.join(iconsDir, 'icon.ico');
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(iconsDir, 'icon.icns');
+  }
+
+  return path.join(iconsDir, 'icon.png');
+}
+
 function getLauncherBounds(windowBounds) {
   const availableWidth = Math.max(windowBounds.width - CONTROL_SURFACE_MARGIN * 2, 0);
   const width = Math.max(
@@ -570,7 +584,7 @@ async function createWindow() {
     height: 900,
     show: false,
     backgroundColor: '#e0e0e0',
-    icon: path.join(__dirname, '../../assets/icons/icon.icns'),
+    icon: getRuntimeWindowIconPath(),
   });
 
   mainWindow.maximize();

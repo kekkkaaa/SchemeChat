@@ -3,11 +3,11 @@ const CHROME_LIKE_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleW
 const PROVIDER_COMPATIBILITY = {
   chatgpt: {
     partition: 'persist:chatgpt',
-    userAgent: CHROME_LIKE_USER_AGENT,
+    userAgent: null,
   },
   gemini: {
     partition: 'persist:shared',
-    userAgent: CHROME_LIKE_USER_AGENT,
+    userAgent: null,
   },
   perplexity: {
     partition: 'persist:shared',
@@ -19,7 +19,7 @@ const PROVIDER_COMPATIBILITY = {
   },
   grok: {
     partition: 'persist:grok',
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    userAgent: null,
   },
 };
 

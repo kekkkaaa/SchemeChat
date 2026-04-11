@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const POLYGPT_TOP_BAR_HEIGHT = 44;
+const SCHEMECHAT_TOP_BAR_HEIGHT = 44;
 
 function loadConfig() {
   try {
@@ -328,37 +328,37 @@ function setupInputScanner(provider, config, getInputElement, setInputElement, f
 
 function removeExistingControls() {
   cleanupTopBarInsetTracking();
-  const existingContainer = document.getElementById('polygpt-controls-container');
+  const existingContainer = document.getElementById('schemechat-controls-container');
   if (existingContainer) {
     existingContainer.remove();
   }
 }
 
 function cleanupTopBarInsetTracking() {
-  if (typeof window.__polygptTopInsetCleanup === 'function') {
-    window.__polygptTopInsetCleanup();
-    window.__polygptTopInsetCleanup = null;
+  if (typeof window.__schemechatTopInsetCleanup === 'function') {
+    window.__schemechatTopInsetCleanup();
+    window.__schemechatTopInsetCleanup = null;
   }
 
   resetAdjustedTopElements();
 }
 
 function resetAdjustedTopElements() {
-  const adjustedElements = document.querySelectorAll('[data-polygpt-adjusted-top="true"]');
+  const adjustedElements = document.querySelectorAll('[data-schemechat-adjusted-top="true"]');
   adjustedElements.forEach((element) => {
-    if (element.dataset.polygptOriginalInlineTop) {
-      element.style.setProperty('top', element.dataset.polygptOriginalInlineTop, 'important');
+    if (element.dataset.schemechatOriginalInlineTop) {
+      element.style.setProperty('top', element.dataset.schemechatOriginalInlineTop, 'important');
     } else {
       element.style.removeProperty('top');
     }
 
-    delete element.dataset.polygptAdjustedTop;
-    delete element.dataset.polygptOriginalInlineTop;
+    delete element.dataset.schemechatAdjustedTop;
+    delete element.dataset.schemechatOriginalInlineTop;
   });
 }
 
 function shouldOffsetTopAnchoredElement(element, insetPx) {
-  if (!element || element.id === 'polygpt-controls-container') {
+  if (!element || element.id === 'schemechat-controls-container') {
     return false;
   }
 
@@ -425,8 +425,8 @@ function applyTopOffsetToElement(element, insetPx) {
   const originalInlineTop = element.style.top || '';
   const shiftPx = Math.max(insetPx - rect.top, 0);
 
-  element.dataset.polygptOriginalInlineTop = originalInlineTop;
-  element.dataset.polygptAdjustedTop = 'true';
+  element.dataset.schemechatOriginalInlineTop = originalInlineTop;
+  element.dataset.schemechatAdjustedTop = 'true';
 
   if (computedTop && computedTop !== 'auto') {
     element.style.setProperty('top', `calc(${computedTop} + ${shiftPx}px)`, 'important');
@@ -504,7 +504,7 @@ function setupTopBarInsetTracking(insetPx, options = {}) {
     delayedSyncTimers.push(timerId);
   });
 
-  window.__polygptTopInsetCleanup = () => {
+  window.__schemechatTopInsetCleanup = () => {
     if (mutationObserver) {
       mutationObserver.disconnect();
       mutationObserver = null;
@@ -530,7 +530,7 @@ function setupTopBarInsetTracking(insetPx, options = {}) {
   scheduleSync();
 }
 
-function applyTopBarInset(insetPx = POLYGPT_TOP_BAR_HEIGHT, options = {}) {
+function applyTopBarInset(insetPx = SCHEMECHAT_TOP_BAR_HEIGHT, options = {}) {
   const normalizedInsetPx = Math.max(0, Math.ceil(insetPx));
   const inset = `${normalizedInsetPx}px`;
   document.documentElement.style.setProperty('scroll-padding-top', inset);
@@ -541,14 +541,14 @@ function applyTopBarInset(insetPx = POLYGPT_TOP_BAR_HEIGHT, options = {}) {
 
 function createControlsContainer() {
   const container = document.createElement('div');
-  container.id = 'polygpt-controls-container';
+  container.id = 'schemechat-controls-container';
   Object.assign(container.style, {
     all: 'initial',
     position: 'fixed',
     top: '0',
     left: '0',
     right: '0',
-    height: `${POLYGPT_TOP_BAR_HEIGHT}px`,
+    height: `${SCHEMECHAT_TOP_BAR_HEIGHT}px`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
@@ -570,7 +570,7 @@ function createControlsContainer() {
 
 function createProviderDropdown() {
   const dropdownContainer = document.createElement('div');
-  dropdownContainer.id = 'polygpt-provider-dropdown';
+  dropdownContainer.id = 'schemechat-provider-dropdown';
   dropdownContainer.title = 'Switch Provider';
 
   const selected = document.createElement('div');
@@ -718,7 +718,7 @@ function attachDropdownEventListeners(dropdown, viewInfo) {
 
 function createSupersizeButton() {
   const button = document.createElement('button');
-  button.id = 'polygpt-supersize-btn';
+  button.id = 'schemechat-supersize-btn';
   button.title = 'Supersize / Restore';
   return button;
 }
@@ -828,8 +828,8 @@ function setupViewInfoListener(createUIControlsFn) {
 
 function setupSupersizeListener() {
   ipcRenderer.on('supersize-state-changed', (event, supersizedPosition) => {
-    const button = document.getElementById('polygpt-supersize-btn');
-    const viewInfoGetter = window.polygptGetViewInfo;
+    const button = document.getElementById('schemechat-supersize-btn');
+    const viewInfoGetter = window.schemechatGetViewInfo;
 
     if (!button || !viewInfoGetter) return;
 
@@ -851,7 +851,7 @@ function setupSupersizeListener() {
 
 function createLoadingOverlay() {
   const overlay = document.createElement('div');
-  overlay.id = 'polygpt-loading-overlay';
+  overlay.id = 'schemechat-loading-overlay';
   Object.assign(overlay.style, {
     position: 'fixed',
     top: '0',
@@ -873,12 +873,12 @@ function createLoadingOverlay() {
     border: '4px solid rgba(0, 0, 0, 0.1)',
     borderTop: '4px solid rgba(0, 0, 0, 0.6)',
     borderRadius: '50%',
-    animation: 'polygpt-spin 1s linear infinite',
+    animation: 'schemechat-spin 1s linear infinite',
   });
 
   const style = document.createElement('style');
   style.textContent = `
-    @keyframes polygpt-spin {
+    @keyframes schemechat-spin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }

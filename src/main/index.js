@@ -1,7 +1,6 @@
 const { app, ipcMain, session, Menu, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { autoUpdater } = require('electron-updater');
 const {
   buildRoundPromptFromDraft,
   buildRoundPromptScaffold,
@@ -501,9 +500,6 @@ app.on('ready', async () => {
     }
   });
 
-  // Check for updates
-  autoUpdater.checkForUpdatesAndNotify();
-
   // IPC handler for text updates from renderer
   ipcMain.handle('send-text-update', async (event, text) => {
     const supersizedPosition = mainWindow.getSupersizedPosition ? mainWindow.getSupersizedPosition() : null;
@@ -533,6 +529,13 @@ app.on('ready', async () => {
     if (mainWindow.mainView && mainWindow.mainView.webContents) {
       mainWindow.mainView.webContents.send('selector-error', { source, error });
     }
+  });
+
+  ipcMain.handle('provider-warning', async (event, source, code) => {
+    if (mainWindow.mainView && mainWindow.mainView.webContents) {
+      mainWindow.mainView.webContents.send('provider-warning', { source, code });
+    }
+    return true;
   });
 
   ipcMain.handle('open-settings-modal', async () => {

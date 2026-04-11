@@ -38,13 +38,38 @@ const GEMINI_UI_OPTIONS = {
     delayedSyncDelays: [300, 1200],
   },
 };
+const GEMINI_UNSAFE_LOGIN_NOTICE_ID = 'schemechat-gemini-unsafe-login-notice';
+const GEMINI_UNSAFE_LOGIN_STRONG_PATTERNS = [
+  '此浏览器或应用可能不安全',
+  'this browser or app may not be secure',
+];
+const GEMINI_UNSAFE_LOGIN_SIGN_IN_PATTERNS = [
+  '无法登录',
+  'couldn’t sign you in',
+  "couldn't sign you in",
+];
+const GEMINI_UNSAFE_LOGIN_AUX_PATTERNS = [
+  '请尝试使用其他浏览器',
+  'try using a different browser',
+  '如果您使用的是受支持的浏览器，可以重新尝试登录',
+  "if you're already using a supported browser, you can try again to sign in",
+];
 
 let inputElement = null;
 let lastSubmittedText = '';
+let hasReportedUnsafeGeminiLogin = false;
+let unsafeGeminiLoginObserver = null;
+let unsafeGeminiLoginFrameId = null;
+let unsafeGeminiLoginDismissed = false;
 
 function isGeminiHost() {
   return window.location.hostname === 'gemini.google.com'
     || window.location.hostname.endsWith('.gemini.google.com');
+}
+
+function isGoogleAccountsHost() {
+  return window.location.hostname === 'accounts.google.com'
+    || window.location.hostname.endsWith('.accounts.google.com');
 }
 
 function findGeminiInput(element) {
@@ -69,6 +94,198 @@ function normalizeGeminiText(text) {
   return String(text || '')
     .replace(/\r\n/g, '\n')
     .replace(/\u200b/g, '');
+}
+
+function readGeminiPageSurfaceText() {
+  return normalizeGeminiText([
+    document.title || '',
+    document.body?.textContent || '',
+  ].join('\n')).toLowerCase();
+}
+
+function isUnsafeGeminiLoginPage() {
+  if (!isGoogleAccountsHost()) {
+    return false;
+  }
+
+  const pageText = readGeminiPageSurfaceText();
+  const hasStrongMatch = GEMINI_UNSAFE_LOGIN_STRONG_PATTERNS.some((pattern) => {
+    const normalizedPattern = normalizeGeminiText(pattern).toLowerCase();
+    return normalizedPattern.length > 0 && pageText.includes(normalizedPattern);
+  });
+  if (hasStrongMatch) {
+    return true;
+  }
+
+  const hasSignInFailure = GEMINI_UNSAFE_LOGIN_SIGN_IN_PATTERNS.some((pattern) => {
+    const normalizedPattern = normalizeGeminiText(pattern).toLowerCase();
+    return normalizedPattern.length > 0 && pageText.includes(normalizedPattern);
+  });
+  if (!hasSignInFailure) {
+    return false;
+  }
+
+  return GEMINI_UNSAFE_LOGIN_AUX_PATTERNS.some((pattern) => {
+    const normalizedPattern = normalizeGeminiText(pattern).toLowerCase();
+    return normalizedPattern.length > 0 && pageText.includes(normalizedPattern);
+  });
+}
+
+function teardownUnsafeGeminiLoginGuard() {
+  if (unsafeGeminiLoginObserver) {
+    unsafeGeminiLoginObserver.disconnect();
+    unsafeGeminiLoginObserver = null;
+  }
+
+  if (unsafeGeminiLoginFrameId !== null) {
+    window.cancelAnimationFrame(unsafeGeminiLoginFrameId);
+    unsafeGeminiLoginFrameId = null;
+  }
+}
+
+function removeUnsafeGeminiLoginNotice() {
+  const existingNotice = document.getElementById(GEMINI_UNSAFE_LOGIN_NOTICE_ID);
+  if (existingNotice) {
+    existingNotice.remove();
+  }
+}
+
+function ensureUnsafeGeminiLoginNotice() {
+  if (document.getElementById(GEMINI_UNSAFE_LOGIN_NOTICE_ID)) {
+    return;
+  }
+
+  const notice = document.createElement('div');
+  notice.id = GEMINI_UNSAFE_LOGIN_NOTICE_ID;
+  Object.assign(notice.style, {
+    position: 'fixed',
+    top: '56px',
+    right: '16px',
+    width: '340px',
+    maxWidth: 'calc(100vw - 32px)',
+    zIndex: '10000001',
+    borderRadius: '14px',
+    padding: '14px 16px 16px',
+    background: 'rgba(120, 53, 15, 0.96)',
+    color: '#fff7ed',
+    boxShadow: '0 16px 32px rgba(15, 23, 42, 0.28)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    lineHeight: '1.45',
+    pointerEvents: 'auto',
+  });
+
+  const header = document.createElement('div');
+  Object.assign(header.style, {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '6px',
+  });
+
+  const title = document.createElement('div');
+  title.textContent = 'Gemini 登录被 Google 拦截';
+  Object.assign(title.style, {
+    fontSize: '14px',
+    fontWeight: '700',
+    flex: '1',
+  });
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.textContent = '关闭';
+  Object.assign(closeButton.style, {
+    border: 'none',
+    borderRadius: '999px',
+    padding: '4px 10px',
+    background: 'rgba(255, 247, 237, 0.14)',
+    color: '#fff7ed',
+    cursor: 'pointer',
+    fontSize: '12px',
+  });
+  closeButton.addEventListener('click', () => {
+    unsafeGeminiLoginDismissed = true;
+    removeUnsafeGeminiLoginNotice();
+  });
+
+  const body = document.createElement('div');
+  body.textContent = '当前页面属于 Google 对内嵌浏览器的登录拦截，不是 SchemeChat 提交失败。新用户首次登录 Gemini 可能无法完成，请优先使用已有会话，或先改用其他 Provider。';
+  Object.assign(body.style, {
+    fontSize: '12px',
+    opacity: '0.96',
+  });
+
+  header.appendChild(title);
+  header.appendChild(closeButton);
+  notice.appendChild(header);
+  notice.appendChild(body);
+  document.body.appendChild(notice);
+}
+
+function syncUnsafeGeminiLoginState() {
+  if (!document.body) {
+    return;
+  }
+
+  if (!isGoogleAccountsHost()) {
+    removeUnsafeGeminiLoginNotice();
+    hasReportedUnsafeGeminiLogin = false;
+    unsafeGeminiLoginDismissed = false;
+    teardownUnsafeGeminiLoginGuard();
+    return;
+  }
+
+  if (isUnsafeGeminiLoginPage()) {
+    if (!unsafeGeminiLoginDismissed) {
+      ensureUnsafeGeminiLoginNotice();
+    }
+    if (!hasReportedUnsafeGeminiLogin) {
+      hasReportedUnsafeGeminiLogin = true;
+      ipcRenderer.invoke('provider-warning', 'gemini', 'unsafe-login-blocked');
+    }
+    return;
+  }
+
+  removeUnsafeGeminiLoginNotice();
+  hasReportedUnsafeGeminiLogin = false;
+  unsafeGeminiLoginDismissed = false;
+}
+
+function scheduleUnsafeGeminiLoginStateSync() {
+  if (unsafeGeminiLoginFrameId !== null) {
+    return;
+  }
+
+  unsafeGeminiLoginFrameId = window.requestAnimationFrame(() => {
+    unsafeGeminiLoginFrameId = null;
+    syncUnsafeGeminiLoginState();
+  });
+}
+
+function setupUnsafeGeminiLoginGuard() {
+  if (!isGoogleAccountsHost()) {
+    teardownUnsafeGeminiLoginGuard();
+    return;
+  }
+
+  if (unsafeGeminiLoginObserver || !document.documentElement) {
+    scheduleUnsafeGeminiLoginStateSync();
+    return;
+  }
+
+  unsafeGeminiLoginObserver = new MutationObserver(() => {
+    scheduleUnsafeGeminiLoginStateSync();
+  });
+
+  unsafeGeminiLoginObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+
+  [0, 400, 1200, 2600].forEach((delayMs) => {
+    window.setTimeout(scheduleUnsafeGeminiLoginStateSync, delayMs);
+  });
 }
 
 function readGeminiInlineText(node) {
@@ -473,13 +690,14 @@ setupInputScanner(
 );
 
 const getViewInfo = setupViewInfoListener((viewInfo) => {
-  window.polygptGetViewInfo = () => viewInfo;
+  window.schemechatGetViewInfo = () => viewInfo;
   createUIControls(viewInfo, GEMINI_UI_OPTIONS);
 });
 
 setupSupersizeListener();
 
 waitForDOM(() => {
+  setupUnsafeGeminiLoginGuard();
   const viewInfo = getViewInfo();
   if (viewInfo) {
     createUIControls(viewInfo, GEMINI_UI_OPTIONS);

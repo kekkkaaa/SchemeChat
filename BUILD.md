@@ -9,8 +9,8 @@
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/ncvgl/polygpt.git
-   cd polygpt
+   git clone https://github.com/zixinYa/SchemeChat.git
+   cd SchemeChat
    ```
 
 2. Install dependencies:
@@ -51,9 +51,7 @@ npm run build -- --linux
 
 Built files will be in the `dist/` directory.
 
-### Releasing and Auto-Updates
-
-This project uses `electron-updater` with GitHub Releases for over-the-air updates.
+### Releasing
 
 #### 1. Increment Version
 Update the version in `package.json`:
@@ -76,4 +74,4 @@ The workflow will:
 - Build binaries for Windows and Linux
 - Upload all artifacts to a new GitHub Release
 
-Users with previous versions installed will automatically download and prompt for the update on the next launch.
+This project distributes release artifacts through GitHub Releases and does not rely on in-app auto-update logic.

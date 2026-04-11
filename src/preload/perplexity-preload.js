@@ -130,7 +130,7 @@ setupInputScanner(
 );
 
 const getViewInfo = setupViewInfoListener((viewInfo) => {
-  window.polygptGetViewInfo = () => viewInfo;
+  window.schemechatGetViewInfo = () => viewInfo;
   createUIControls(viewInfo);
 });
 

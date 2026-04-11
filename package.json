@@ -1,10 +1,9 @@
 {
-  "name": "polygpt",
+  "name": "schemechat",
   "version": "0.2.8",
-  "description": "Mirror text to ChatGPT and Gemini simultaneously",
+  "description": "Coordinate multi-provider AI discussions in a split workspace",
   "author": {
-    "name": "Nathan Cavaglione",
-    "email": "nathan@polygpt.app"
+    "name": "SchemeChat"
   },
   "main": "src/main/index.js",
   "homepage": "./",
@@ -15,7 +14,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "electron-updater": "^6.7.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -23,15 +21,8 @@
     "electron-builder": "^26.8.1"
   },
   "build": {
-    "appId": "com.polygpt.app",
-    "productName": "PolyGPT",
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "ncvgl",
-        "repo": "polygpt"
-      }
-    ],
+    "appId": "com.schemechat.app",
+    "productName": "SchemeChat",
     "directories": {
       "buildResources": "assets"
     },
@@ -49,7 +40,7 @@
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "PolyGPT needs access to your microphone for voice input in ChatGPT and other chat services."
+        "NSMicrophoneUsageDescription": "SchemeChat needs access to your microphone for voice input in supported chat services."
       },
       "target": [
         {
