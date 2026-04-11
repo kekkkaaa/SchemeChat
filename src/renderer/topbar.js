@@ -1,8 +1,33 @@
 const { ipcRenderer } = require('electron');
+const { initThemeSync } = require('./theme-sync');
 
 const settingsBtn = document.getElementById('settingsBtn');
 const discussionConsoleBtn = document.getElementById('discussionConsoleBtn');
 const codexHelpBtn = document.getElementById('codexHelpBtn');
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+
+let currentThemeMode = 'light';
+
+function syncThemeToggle(themeState) {
+  currentThemeMode = themeState?.mode === 'dark' ? 'dark' : 'light';
+  const nextModeLabel = currentThemeMode === 'dark' ? '白天模式' : '夜间模式';
+
+  themeToggleBtn.dataset.themeMode = currentThemeMode;
+  themeToggleBtn.setAttribute('aria-checked', String(currentThemeMode === 'dark'));
+  themeToggleBtn.setAttribute('aria-label', `切换到${nextModeLabel}`);
+  themeToggleBtn.setAttribute('title', `切换到${nextModeLabel}`);
+}
+
+const themeSync = initThemeSync({
+  onChange: syncThemeToggle,
+});
+
+themeToggleBtn.addEventListener('click', () => {
+  const nextMode = currentThemeMode === 'dark' ? 'light' : 'dark';
+  themeSync.setThemeMode(nextMode).catch((error) => {
+    console.error('Failed to toggle theme mode:', error);
+  });
+});
 
 // ─── 工作台 ───
 discussionConsoleBtn.addEventListener('click', () => {

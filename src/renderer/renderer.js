@@ -1,5 +1,6 @@
 const { ipcRenderer } = require('electron');
 const throttle = require('../utils/throttle');
+const { initThemeSync } = require('./theme-sync');
 const {
   AUTO_WAIT_POLL_INTERVAL_MS,
   AUTO_WAIT_TIMEOUT_MS,
@@ -78,6 +79,8 @@ const state = {
 let syncInFlight = false;
 let privateNewChatInFlight = false;
 let dragState = null;
+
+initThemeSync();
 let resizeState = null;
 
 const refs = {

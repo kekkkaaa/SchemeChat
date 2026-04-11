@@ -1,6 +1,9 @@
 const { ipcRenderer, clipboard } = require('electron');
 const os = require('os');
 const path = require('path');
+const { initThemeSync } = require('./theme-sync');
+
+initThemeSync();
 
 // ─── 配置片段 ───
 const snippets = {

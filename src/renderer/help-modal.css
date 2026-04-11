@@ -1,14 +1,64 @@
+:root {
+  --modal-bg: #ffffff;
+  --shell-bg: #ffffff;
+  --header-border: #e5e5e7;
+  --text: #111111;
+  --text-strong: #222222;
+  --text-soft: #555555;
+  --text-muted: #666666;
+  --text-faint: #999999;
+  --close-bg: #ebebed;
+  --close-bg-hover: #d0d0d2;
+  --inline-code-bg: #f0f0f2;
+  --inline-code-text: #333333;
+  --code-bg: #1e1e2e;
+  --code-text: #cdd6f4;
+  --code-btn-border: rgba(255, 255, 255, 0.15);
+  --code-btn-bg: rgba(255, 255, 255, 0.1);
+  --code-btn-bg-hover: rgba(255, 255, 255, 0.2);
+  --tool-read-bg: #f0faf0;
+  --tool-read-border: #4caf50;
+  --tool-write-bg: #fff8f0;
+  --tool-write-border: #f59e0b;
+}
+
+html[data-theme='dark'] {
+  --modal-bg: #11161f;
+  --shell-bg: #11161f;
+  --header-border: #273140;
+  --text: #edf2f8;
+  --text-strong: #f6f9fc;
+  --text-soft: #c1ccd7;
+  --text-muted: #aab6c2;
+  --text-faint: #8f9aa7;
+  --close-bg: #202938;
+  --close-bg-hover: #293547;
+  --inline-code-bg: #1d2734;
+  --inline-code-text: #d7e4f3;
+  --code-bg: #0f1724;
+  --code-text: #dbe9ff;
+  --code-btn-border: rgba(219, 233, 255, 0.16);
+  --code-btn-bg: rgba(219, 233, 255, 0.08);
+  --code-btn-bg-hover: rgba(219, 233, 255, 0.16);
+  --tool-read-bg: rgba(89, 175, 112, 0.12);
+  --tool-read-border: #66c97d;
+  --tool-write-bg: rgba(245, 158, 11, 0.12);
+  --tool-write-border: #ffbf60;
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   width: 100%;
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #ffffff;
+  background: var(--modal-bg);
+  color: var(--text);
   overflow: hidden;
 }
 
@@ -16,15 +66,15 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--shell-bg);
 }
 
-/* ─── Header ─── */
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px 13px;
-  border-bottom: 1px solid #e5e5e7;
+  border-bottom: 1px solid var(--header-border);
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
@@ -32,7 +82,7 @@ html, body {
 .modal-title {
   font-size: 13px;
   font-weight: 700;
-  color: #111;
+  color: var(--text);
 }
 
 .close-btn {
@@ -41,8 +91,8 @@ html, body {
   height: 22px;
   border: none;
   border-radius: 50%;
-  background: #ebebed;
-  color: #555;
+  background: var(--close-bg);
+  color: var(--text-soft);
   font-size: 11px;
   cursor: pointer;
   display: flex;
@@ -53,10 +103,9 @@ html, body {
 }
 
 .close-btn:hover {
-  background: #d0d0d2;
+  background: var(--close-bg-hover);
 }
 
-/* ─── Body ─── */
 .modal-body {
   flex: 1;
   overflow-y: auto;
@@ -66,7 +115,6 @@ html, body {
   gap: 20px;
 }
 
-/* ─── Section ─── */
 .help-section {
   display: flex;
   flex-direction: column;
@@ -76,7 +124,7 @@ html, body {
 .section-title {
   font-size: 12px;
   font-weight: 700;
-  color: #222;
+  color: var(--text-strong);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -96,27 +144,26 @@ html, body {
 
 .desc {
   font-size: 12px;
-  color: #555;
+  color: var(--text-soft);
   line-height: 1.6;
 }
 
 .ic {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 11px;
-  background: #f0f0f2;
+  background: var(--inline-code-bg);
   padding: 1px 5px;
   border-radius: 4px;
-  color: #333;
+  color: var(--inline-code-text);
 }
 
-/* ─── Code block ─── */
 .code-wrap {
   position: relative;
 }
 
 .code-block {
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--code-bg);
+  color: var(--code-text);
   font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
   font-size: 11.5px;
   line-height: 1.65;
@@ -133,24 +180,26 @@ html, body {
   right: 8px;
   height: 22px;
   padding: 0 9px;
-  border: 1px solid rgba(255,255,255,0.15);
+  border: 1px solid var(--code-btn-border);
   border-radius: 5px;
-  background: rgba(255,255,255,0.1);
-  color: #cdd6f4;
+  background: var(--code-btn-bg);
+  color: var(--code-text);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s ease;
 }
 
-.copy-btn:hover  { background: rgba(255,255,255,0.2); }
+.copy-btn:hover {
+  background: var(--code-btn-bg-hover);
+}
+
 .copy-btn.copied {
-  background: rgba(166,227,161,0.25);
+  background: rgba(166, 227, 161, 0.25);
   color: #a6e3a1;
-  border-color: rgba(166,227,161,0.35);
+  border-color: rgba(166, 227, 161, 0.35);
 }
 
-/* ─── Tools list ─── */
 .tools-list {
   display: flex;
   flex-direction: column;
@@ -166,25 +215,25 @@ html, body {
   border-left: 3px solid transparent;
 }
 
-.tool.read  { background: #f0faf0; border-left-color: #4caf50; }
-.tool.write { background: #fff8f0; border-left-color: #f59e0b; }
+.tool.read  { background: var(--tool-read-bg); border-left-color: var(--tool-read-border); }
+.tool.write { background: var(--tool-write-bg); border-left-color: var(--tool-write-border); }
 
 .tool-name {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 10.5px;
   font-weight: 600;
-  color: #222;
+  color: var(--text-strong);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .tool-desc {
   font-size: 11px;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .tip {
   font-size: 11px;
-  color: #999;
+  color: var(--text-faint);
   margin-top: 2px;
 }

@@ -429,6 +429,22 @@ function getRuntimeWindowIconPath() {
   return path.join(iconsDir, 'icon.png');
 }
 
+function normalizeThemeState(rawThemeState = {}) {
+  const mode = rawThemeState?.mode === 'dark' ? 'dark' : 'light';
+  return {
+    mode,
+    isDark: mode === 'dark',
+  };
+}
+
+function getWindowThemeBackgroundColor(mode) {
+  return mode === 'dark' ? '#0e1117' : '#ece8df';
+}
+
+function getModalThemeBackgroundColor(mode) {
+  return mode === 'dark' ? '#11161f' : '#f6f7f8';
+}
+
 function getLauncherBounds(windowBounds) {
   const availableWidth = Math.max(windowBounds.width - CONTROL_SURFACE_MARGIN * 2, 0);
   const width = Math.max(
@@ -583,12 +599,13 @@ function createPaneState(paneConfig) {
   };
 }
 
-async function createWindow() {
+async function createWindow(options = {}) {
+  let currentThemeState = normalizeThemeState(options.themeState);
   const mainWindow = new BaseWindow({
     width: 1600,
     height: 900,
     show: false,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: getWindowThemeBackgroundColor(currentThemeState.mode),
     icon: getRuntimeWindowIconPath(),
   });
 
@@ -618,6 +635,43 @@ async function createWindow() {
 
   attachEditableContextMenu(topBarView.webContents);
   attachEditableContextMenu(mainView.webContents);
+
+  function dispatchThemeStateToWebContents(targetWebContents) {
+    if (!targetWebContents || targetWebContents.isDestroyed()) {
+      return;
+    }
+
+    targetWebContents.send('app-theme-updated', currentThemeState);
+  }
+
+  function setThemeState(nextThemeState) {
+    currentThemeState = normalizeThemeState(nextThemeState);
+
+    if (typeof mainWindow.setBackgroundColor === 'function') {
+      mainWindow.setBackgroundColor(getWindowThemeBackgroundColor(currentThemeState.mode));
+    }
+
+    if (settingsWindow && !settingsWindow.isDestroyed() && typeof settingsWindow.setBackgroundColor === 'function') {
+      settingsWindow.setBackgroundColor(getModalThemeBackgroundColor(currentThemeState.mode));
+    }
+
+    if (helpWindow && !helpWindow.isDestroyed() && typeof helpWindow.setBackgroundColor === 'function') {
+      helpWindow.setBackgroundColor(getModalThemeBackgroundColor(currentThemeState.mode));
+    }
+
+    dispatchThemeStateToWebContents(topBarView.webContents);
+    dispatchThemeStateToWebContents(mainView.webContents);
+
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      dispatchThemeStateToWebContents(settingsWindow.webContents);
+    }
+
+    if (helpWindow && !helpWindow.isDestroyed()) {
+      dispatchThemeStateToWebContents(helpWindow.webContents);
+    }
+
+    return currentThemeState;
+  }
 
   function getAvailableProviders() {
     return SWITCHABLE_PROVIDER_KEYS.filter((key) => PROVIDERS[key]).map((key) => ({
@@ -948,7 +1002,7 @@ async function createWindow() {
       maximizable: false,
       fullscreenable: false,
       frame: false,
-      backgroundColor: '#ffffff',
+      backgroundColor: getModalThemeBackgroundColor(currentThemeState.mode),
       skipTaskbar: true,
       webPreferences: {
         nodeIntegration: true,
@@ -967,6 +1021,7 @@ async function createWindow() {
       settingsWindow.center();
       settingsWindow.show();
       settingsWindow.focus();
+      dispatchThemeStateToWebContents(settingsWindow.webContents);
     });
 
     settingsWindow.on('resize', () => {
@@ -1013,7 +1068,7 @@ async function createWindow() {
       maximizable: false,
       fullscreenable: false,
       frame: false,
-      backgroundColor: '#ffffff',
+      backgroundColor: getModalThemeBackgroundColor(currentThemeState.mode),
       skipTaskbar: true,
       webPreferences: {
         nodeIntegration: true,
@@ -1029,6 +1084,7 @@ async function createWindow() {
       helpWindow.center();
       helpWindow.show();
       helpWindow.focus();
+      dispatchThemeStateToWebContents(helpWindow.webContents);
     });
 
     helpWindow.on('closed', () => {
@@ -1065,6 +1121,7 @@ async function createWindow() {
 
   topBarView.webContents.on('did-finish-load', () => {
     topBarView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
+    dispatchThemeStateToWebContents(topBarView.webContents);
   });
 
   mainView.webContents.on('console-message', (event, level, message) => {
@@ -1073,6 +1130,7 @@ async function createWindow() {
 
   mainView.webContents.on('did-finish-load', () => {
     mainView.webContents.send('discussion-console-expanded-changed', discussionConsoleExpanded);
+    dispatchThemeStateToWebContents(mainView.webContents);
   });
 
   topBarView.webContents.loadFile(path.join(__dirname, '../renderer/topbar.html'));
@@ -1107,6 +1165,8 @@ async function createWindow() {
   mainWindow.closeSettingsModal = closeSettingsModal;
   mainWindow.openHelpModal = openHelpModal;
   mainWindow.closeHelpModal = closeHelpModal;
+  mainWindow.setThemeState = setThemeState;
+  mainWindow.getThemeState = () => currentThemeState;
 
   return mainWindow;
 }

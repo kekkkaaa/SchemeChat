@@ -4,13 +4,51 @@
   box-sizing: border-box;
 }
 
+:root {
+  --topbar-bg: #f7f4ee;
+  --topbar-line: #e2dbcf;
+  --topbar-btn-bg: #ffffff;
+  --topbar-btn-bg-hover: #f2ede4;
+  --topbar-btn-bg-active: #ece4d8;
+  --topbar-btn-border: #d7d0c5;
+  --topbar-btn-text: #27231d;
+  --topbar-btn-active-bg: #eaf2ff;
+  --topbar-btn-active-border: #b9cff4;
+  --topbar-btn-active-text: #124cae;
+  --toggle-track: linear-gradient(135deg, #f8f1df 0%, #ebe0c8 100%);
+  --toggle-track-border: rgba(149, 123, 87, 0.24);
+  --toggle-sun: #bf7a18;
+  --toggle-moon: #586174;
+  --toggle-knob: #ffffff;
+  --toggle-knob-shadow: 0 6px 14px rgba(63, 52, 36, 0.2);
+}
+
+html[data-theme='dark'] {
+  --topbar-bg: #131922;
+  --topbar-line: #222b37;
+  --topbar-btn-bg: #18212d;
+  --topbar-btn-bg-hover: #1d2836;
+  --topbar-btn-bg-active: #223040;
+  --topbar-btn-border: #2d3948;
+  --topbar-btn-text: #edf2f8;
+  --topbar-btn-active-bg: #17304d;
+  --topbar-btn-active-border: #325c8a;
+  --topbar-btn-active-text: #c7e3ff;
+  --toggle-track: linear-gradient(135deg, #17212d 0%, #243448 100%);
+  --toggle-track-border: rgba(144, 177, 220, 0.22);
+  --toggle-sun: #f7c35a;
+  --toggle-moon: #d7e4ff;
+  --toggle-knob: #f4f7fb;
+  --toggle-knob-shadow: 0 6px 14px rgba(5, 10, 18, 0.45);
+}
+
 html,
 body {
   width: 100%;
   height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #f7f7f8;
+  background: var(--topbar-bg);
 }
 
 .topbar {
@@ -20,44 +58,46 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  border-bottom: 1px solid #e5e5e7;
+  border-bottom: 1px solid var(--topbar-line);
+  background: var(--topbar-bg);
 }
 
-.topbar-fill {
-  flex: 1;
-}
-
+.topbar-leading,
 .topbar-actions {
   display: flex;
   align-items: center;
+}
+
+.topbar-actions {
   gap: 8px;
 }
 
 .topbar-btn {
   height: 26px;
   padding: 0 10px;
-  border: 1px solid #d7d7da;
+  border: 1px solid var(--topbar-btn-border);
   border-radius: 6px;
-  background: #ffffff;
-  color: #222222;
+  background: var(--topbar-btn-bg);
+  color: var(--topbar-btn-text);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
 }
 
 .topbar-btn:hover {
-  background: #f2f2f3;
+  background: var(--topbar-btn-bg-hover);
 }
 
 .topbar-btn:active {
-  background: #ececee;
+  background: var(--topbar-btn-bg-active);
 }
 
 .topbar-btn.is-active {
-  border-color: #b9cff4;
-  background: #eaf2ff;
-  color: #124cae;
+  border-color: var(--topbar-btn-active-border);
+  background: var(--topbar-btn-active-bg);
+  color: var(--topbar-btn-active-text);
 }
 
 .topbar-icon-btn {
@@ -71,4 +111,76 @@ body {
 
 .settings-btn {
   min-width: 58px;
+}
+
+.theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 62px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--toggle-track-border);
+  border-radius: 999px;
+  background: var(--toggle-track);
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.theme-toggle:hover {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03), 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.theme-toggle:active {
+  transform: translateY(1px);
+}
+
+.theme-toggle-icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.theme-toggle-icon-sun {
+  color: var(--toggle-sun);
+}
+
+.theme-toggle-icon-moon {
+  color: var(--toggle-moon);
+}
+
+.theme-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--toggle-knob);
+  box-shadow: var(--toggle-knob-shadow);
+  transition: transform 0.22s ease;
+}
+
+.theme-toggle[data-theme-mode='dark'] .theme-toggle-knob {
+  transform: translateX(34px);
+}
+
+.theme-toggle[data-theme-mode='light'] .theme-toggle-icon-sun,
+.theme-toggle[data-theme-mode='dark'] .theme-toggle-icon-moon {
+  opacity: 0.3;
+  transform: scale(0.92);
+}
+
+.theme-toggle[data-theme-mode='light'] .theme-toggle-icon-moon,
+.theme-toggle[data-theme-mode='dark'] .theme-toggle-icon-sun {
+  opacity: 1;
+  transform: scale(1);
 }

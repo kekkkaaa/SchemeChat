@@ -8,7 +8,21 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="topbar-fill"></div>
+    <div class="topbar-leading">
+      <button
+        id="themeToggleBtn"
+        class="theme-toggle"
+        type="button"
+        role="switch"
+        aria-checked="false"
+        aria-label="切换到夜间模式"
+        title="切换到夜间模式"
+      >
+        <span class="theme-toggle-icon theme-toggle-icon-sun" aria-hidden="true">☀</span>
+        <span class="theme-toggle-knob" aria-hidden="true"></span>
+        <span class="theme-toggle-icon theme-toggle-icon-moon" aria-hidden="true">☾</span>
+      </button>
+    </div>
     <div class="topbar-actions">
       <button
         id="codexHelpBtn"

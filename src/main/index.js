@@ -36,6 +36,7 @@ const CHATGPT_SESSION_STORAGES = [
 const WRITE_TOOLS_ENV_NAME = 'SCHEMECHAT_MCP_ENABLE_WRITE_TOOLS';
 const DEFAULT_APP_SETTINGS = Object.freeze({
   mcpWriteToolsEnabled: false,
+  themeMode: 'light',
 });
 
 [process.stdout, process.stderr].forEach((stream) => {
@@ -63,9 +64,14 @@ function isTruthyFlag(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+function normalizeThemeMode(mode) {
+  return mode === 'dark' ? 'dark' : 'light';
+}
+
 function normalizeAppSettings(rawSettings = {}) {
   return {
     mcpWriteToolsEnabled: rawSettings?.mcpWriteToolsEnabled === true,
+    themeMode: normalizeThemeMode(rawSettings?.themeMode),
   };
 }
 
@@ -104,6 +110,24 @@ function getEnvWriteToolsOverrideEnabled() {
 
 function isMcpWriteToolsEnabled() {
   return Boolean(appSettings?.mcpWriteToolsEnabled) || getEnvWriteToolsOverrideEnabled();
+}
+
+function getThemeState() {
+  const mode = normalizeThemeMode(appSettings?.themeMode);
+  return {
+    mode,
+    isDark: mode === 'dark',
+  };
+}
+
+function applyThemeState() {
+  if (!mainWindow || typeof mainWindow.setThemeState !== 'function') {
+    return getThemeState();
+  }
+
+  const themeState = getThemeState();
+  mainWindow.setThemeState(themeState);
+  return themeState;
 }
 
 function readChatGptSessionMarker() {
@@ -381,6 +405,9 @@ function getCurrentLayoutSettingsState() {
 function buildSettingsState(layoutState = getCurrentLayoutSettingsState()) {
   return {
     ...layoutState,
+    appearance: {
+      themeMode: getThemeState().mode,
+    },
     integrations: {
       mcpWriteToolsEnabled: Boolean(appSettings?.mcpWriteToolsEnabled),
       mcpWriteToolsEffective: isMcpWriteToolsEnabled(),
@@ -674,8 +701,11 @@ app.on('ready', async () => {
 
   hideNativeAppMenu();
 
-  mainWindow = await windowManager.createWindow();
+  mainWindow = await windowManager.createWindow({
+    themeState: getThemeState(),
+  });
   hideNativeAppMenu(mainWindow);
+  applyThemeState();
 
   try {
     await startCodexBridge();
@@ -739,6 +769,7 @@ app.on('ready', async () => {
   ipcMain.handle('open-settings-modal', async () => {
     if (mainWindow && typeof mainWindow.openSettingsModal === 'function') {
       mainWindow.openSettingsModal();
+      applyThemeState();
       return true;
     }
     return false;
@@ -755,6 +786,7 @@ app.on('ready', async () => {
   ipcMain.handle('open-help-modal', async () => {
     if (mainWindow && typeof mainWindow.openHelpModal === 'function') {
       mainWindow.openHelpModal();
+      applyThemeState();
       return true;
     }
     return false;
@@ -790,6 +822,20 @@ app.on('ready', async () => {
 
   ipcMain.handle('get-settings-state', async () => {
     return buildSettingsState();
+  });
+
+  ipcMain.handle('get-theme-state', async () => {
+    return getThemeState();
+  });
+
+  ipcMain.handle('set-theme-mode', async (event, nextMode) => {
+    appSettings = saveAppSettings({
+      ...DEFAULT_APP_SETTINGS,
+      ...appSettings,
+      themeMode: normalizeThemeMode(nextMode),
+    });
+
+    return applyThemeState();
   });
 
   ipcMain.handle('apply-settings-layout', async (event, nextSettings) => {
@@ -1221,7 +1267,10 @@ app.on('will-quit', () => {
 
 app.on('activate', async () => {
   if (mainWindow === null) {
-    mainWindow = await windowManager.createWindow();
+    mainWindow = await windowManager.createWindow({
+      themeState: getThemeState(),
+    });
     hideNativeAppMenu(mainWindow);
+    applyThemeState();
   }
 });

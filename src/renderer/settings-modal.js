@@ -1,4 +1,5 @@
 const { ipcRenderer } = require('electron');
+const { initThemeSync } = require('./theme-sync');
 
 const closeBtn = document.getElementById('closeBtn');
 const screenTabBtn = document.getElementById('screenTabBtn');
@@ -20,6 +21,8 @@ const mcpWriteToolsHint = document.getElementById('mcpWriteToolsHint');
 const modeButtons = Array.from(document.querySelectorAll('.mode-btn'));
 
 const PREVIEW_GAP = 8;
+
+initThemeSync();
 
 let activeTab = 'screen';
 let appliedState = null;
