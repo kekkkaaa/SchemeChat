@@ -163,16 +163,6 @@ function clickElement(element) {
       element.focus();
     }
 
-    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((eventName) => {
-      const event = new MouseEvent(eventName, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-      });
-      element.dispatchEvent(event);
-    });
-
     element.click();
     return true;
   } catch (error) {
@@ -644,7 +634,9 @@ function populateDropdownOptions(dropdown, viewInfo) {
   const menu = dropdown.querySelector('.dropdown-menu');
 
   const currentProvider = viewInfo.availableProviders.find(p => p.key === viewInfo.provider);
-  selected.textContent = currentProvider ? currentProvider.name : '';
+  selected.textContent = currentProvider
+    ? currentProvider.name
+    : (viewInfo.providerName || viewInfo.provider || '');
 
   viewInfo.availableProviders.forEach(provider => {
     const option = document.createElement('div');

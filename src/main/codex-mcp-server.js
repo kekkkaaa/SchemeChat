@@ -7,6 +7,7 @@ const z = require('zod/v4');
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3769;
+const WRITE_TOOLS_ENV_NAME = 'SCHEMECHAT_MCP_ENABLE_WRITE_TOOLS';
 
 function createTextToolResult(label, payload, isError = false) {
   return {
@@ -25,6 +26,10 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function isTruthyFlag(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function buildBroadcastContextText({ topic = '', focus = '', context = '' } = {}) {
@@ -51,6 +56,7 @@ function createSchemeChatMcpServer(options = {}) {
   const host = String(options.host || process.env.SCHEMECHAT_MCP_HOST || DEFAULT_HOST);
   const requestedPort = Number.parseInt(process.env.SCHEMECHAT_MCP_PORT || options.port || DEFAULT_PORT, 10);
   const port = Number.isFinite(requestedPort) ? requestedPort : DEFAULT_PORT;
+  const writeToolsEnabled = options.allowWriteTools === true || isTruthyFlag(process.env[WRITE_TOOLS_ENV_NAME]);
   const sessions = new Map();
   let httpServer = null;
   let expressApp = null;
@@ -95,95 +101,168 @@ function createSchemeChatMcpServer(options = {}) {
       return createTextToolResult('SchemeChat latest replies', result, result?.ok === false);
     });
 
-    server.registerTool('inject_text_to_panes', {
-      title: 'Inject Text To Panes',
-      description: 'Mirror a text draft into the target SchemeChat pane input boxes.',
-      inputSchema: {
-        paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the text. Empty means all panes.'),
-        text: z.string().describe('Text to inject into the target pane inputs.'),
-      },
-    }, async ({ paneIds = [], text }) => {
-      const result = await options.injectTextToPanes(paneIds, text);
-      return createTextToolResult('SchemeChat text injection result', result, result?.ok === false);
-    });
+    if (typeof options.getDiscussionFlowState === 'function') {
+      server.registerTool('get_discussion_flow_state', {
+        title: 'Get Discussion Flow State',
+        description: 'Inspect the current discussion controller state, including mode, round, draft, and next available actions.',
+        inputSchema: {},
+      }, async () => {
+        const result = await options.getDiscussionFlowState();
+        return createTextToolResult('SchemeChat discussion flow state', result, result?.ok === false);
+      });
+    }
 
-    server.registerTool('submit_message_to_panes', {
-      title: 'Submit Message To Panes',
-      description: 'Submit the current input box content for the target panes.',
-      inputSchema: {
-        paneIds: z.array(z.string()).optional().describe('Optional pane IDs to submit. Empty means all panes.'),
-      },
-    }, async ({ paneIds = [] }) => {
-      const result = await options.submitMessageToPanes(paneIds);
-      return createTextToolResult('SchemeChat submit result', result, result?.ok === false);
-    });
+    if (writeToolsEnabled) {
+      if (typeof options.updateDiscussionFlow === 'function') {
+        server.registerTool('update_discussion_flow', {
+          title: 'Update Discussion Flow',
+          description: 'Update discussion controller inputs such as topic, round note, draft, or run mode. Respects the same editability rules as the UI.',
+          inputSchema: {
+            topic: z.string().optional().describe('Optional discussion topic. Pass an empty string to clear it.'),
+            roundNote: z.string().optional().describe('Optional per-round note or temporary instruction. Pass an empty string to clear it.'),
+            draft: z.string().optional().describe('Optional current draft text. Pass an empty string to clear it.'),
+            runMode: z.enum(['manual', 'auto']).optional().describe('Optional discussion run mode to apply before the next action.'),
+          },
+        }, async ({ topic, roundNote, draft, runMode }) => {
+          const patch = {};
+          if (topic !== undefined) {
+            patch.topic = topic;
+          }
+          if (roundNote !== undefined) {
+            patch.roundNote = roundNote;
+          }
+          if (draft !== undefined) {
+            patch.draft = draft;
+          }
+          if (runMode !== undefined) {
+            patch.runMode = runMode;
+          }
 
-    server.registerTool('broadcast_context_to_panes', {
-      title: 'Broadcast Context To Panes',
-      description: 'Format a shared context block, inject it into target panes, and optionally submit it.',
-      inputSchema: {
-        paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the context. Empty means all panes.'),
-        context: z.string().describe('The shared context to broadcast into the target pane inputs.'),
-        topic: z.string().optional().describe('Optional topic heading for the broadcast block.'),
-        focus: z.string().optional().describe('Optional focus or instruction heading for the broadcast block.'),
-        sendNow: z.boolean().optional().describe('Whether to submit the injected content immediately. Defaults to false.'),
-      },
-    }, async ({ paneIds = [], context, topic = '', focus = '', sendNow = false }) => {
-      const normalizedContext = String(context || '').trim();
-      if (!normalizedContext) {
-        return createTextToolResult('SchemeChat broadcast result', {
-          ok: false,
-          message: 'Context is required.',
-        }, true);
+          const result = await options.updateDiscussionFlow(patch);
+          return createTextToolResult('SchemeChat discussion flow update', result, result?.ok === false);
+        });
       }
 
-      const previewText = buildBroadcastContextText({
-        topic,
-        focus,
-        context: normalizedContext,
+      if (typeof options.triggerDiscussionAction === 'function') {
+        server.registerTool('trigger_discussion_action', {
+          title: 'Trigger Discussion Action',
+          description: 'Trigger a high-level discussion controller action such as primary, generate, submit, resume, or next-round.',
+          inputSchema: {
+            action: z.enum([
+              'primary',
+              'generate-round-one',
+              'submit-current-draft',
+              'prepare-next-manual-round',
+              'start-auto-run',
+              'resume-auto-run',
+              'regenerate-draft',
+              'confirm-summarizer',
+              'reset-console',
+            ]).describe('Discussion controller action to trigger.'),
+            waitForCompletion: z.boolean().optional().describe('When true, wait for the action promise to complete. Leave false for long-running auto flows.'),
+          },
+        }, async ({ action, waitForCompletion = false }) => {
+          const result = await options.triggerDiscussionAction(action, {
+            waitForCompletion,
+          });
+          return createTextToolResult('SchemeChat discussion action result', {
+            action,
+            waitForCompletion: Boolean(waitForCompletion),
+            ...result,
+          }, result?.ok === false);
+        });
+      }
+
+      server.registerTool('inject_text_to_panes', {
+        title: 'Inject Text To Panes',
+        description: 'Low-level tool: mirror raw text into the target SchemeChat pane input boxes.',
+        inputSchema: {
+          paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the text. Empty means all panes.'),
+          text: z.string().describe('Text to inject into the target pane inputs.'),
+        },
+      }, async ({ paneIds = [], text }) => {
+        const result = await options.injectTextToPanes(paneIds, text);
+        return createTextToolResult('SchemeChat text injection result', result, result?.ok === false);
       });
 
-      const injectResult = await options.injectTextToPanes(paneIds, previewText);
-      if (!injectResult?.ok) {
+      server.registerTool('submit_message_to_panes', {
+        title: 'Submit Message To Panes',
+        description: 'Low-level tool: submit the current input box content for the target panes.',
+        inputSchema: {
+          paneIds: z.array(z.string()).optional().describe('Optional pane IDs to submit. Empty means all panes.'),
+        },
+      }, async ({ paneIds = [] }) => {
+        const result = await options.submitMessageToPanes(paneIds);
+        return createTextToolResult('SchemeChat submit result', result, result?.ok === false);
+      });
+
+      server.registerTool('broadcast_context_to_panes', {
+        title: 'Broadcast Context To Panes',
+        description: 'Low-level tool: format a shared context block, inject it into target panes, and optionally submit it.',
+        inputSchema: {
+          paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the context. Empty means all panes.'),
+          context: z.string().describe('The shared context to broadcast into the target pane inputs.'),
+          topic: z.string().optional().describe('Optional topic heading for the broadcast block.'),
+          focus: z.string().optional().describe('Optional focus or instruction heading for the broadcast block.'),
+          sendNow: z.boolean().optional().describe('Whether to submit the injected content immediately. Defaults to false.'),
+        },
+      }, async ({ paneIds = [], context, topic = '', focus = '', sendNow = false }) => {
+        const normalizedContext = String(context || '').trim();
+        if (!normalizedContext) {
+          return createTextToolResult('SchemeChat broadcast result', {
+            ok: false,
+            message: 'Context is required.',
+          }, true);
+        }
+
+        const previewText = buildBroadcastContextText({
+          topic,
+          focus,
+          context: normalizedContext,
+        });
+
+        const injectResult = await options.injectTextToPanes(paneIds, previewText);
+        if (!injectResult?.ok) {
+          return createTextToolResult('SchemeChat broadcast result', {
+            ok: false,
+            message: injectResult?.message || 'Failed to inject the broadcast context.',
+            paneIds,
+            sendNow: Boolean(sendNow),
+            previewText,
+            injectResult,
+          }, true);
+        }
+
+        let submitResult = null;
+        if (sendNow) {
+          await delay(180);
+          submitResult = await options.submitMessageToPanes(paneIds);
+          if (!submitResult?.ok) {
+            return createTextToolResult('SchemeChat broadcast result', {
+              ok: false,
+              message: submitResult?.message || 'Context was injected, but submit failed.',
+              paneIds,
+              sendNow: true,
+              previewText,
+              injectResult,
+              submitResult,
+            }, true);
+          }
+        }
+
         return createTextToolResult('SchemeChat broadcast result', {
-          ok: false,
-          message: injectResult?.message || 'Failed to inject the broadcast context.',
+          ok: true,
+          message: sendNow
+            ? 'Broadcast context injected and submitted.'
+            : 'Broadcast context injected.',
           paneIds,
           sendNow: Boolean(sendNow),
           previewText,
           injectResult,
-        }, true);
-      }
-
-      let submitResult = null;
-      if (sendNow) {
-        await delay(180);
-        submitResult = await options.submitMessageToPanes(paneIds);
-        if (!submitResult?.ok) {
-          return createTextToolResult('SchemeChat broadcast result', {
-            ok: false,
-            message: submitResult?.message || 'Context was injected, but submit failed.',
-            paneIds,
-            sendNow: true,
-            previewText,
-            injectResult,
-            submitResult,
-          }, true);
-        }
-      }
-
-      return createTextToolResult('SchemeChat broadcast result', {
-        ok: true,
-        message: sendNow
-          ? 'Broadcast context injected and submitted.'
-          : 'Broadcast context injected.',
-        paneIds,
-        sendNow: Boolean(sendNow),
-        previewText,
-        injectResult,
-        submitResult,
+          submitResult,
+        });
       });
-    });
+    }
 
     return server;
   }
@@ -325,6 +404,7 @@ function createSchemeChatMcpServer(options = {}) {
         port,
         url: serverUrl,
         sessionCount: sessions.size,
+        writeToolsEnabled,
       });
     });
     expressApp.post('/mcp', handlePostRequest);
@@ -346,6 +426,7 @@ function createSchemeChatMcpServer(options = {}) {
       host,
       port,
       url: serverUrl,
+      writeToolsEnabled,
     };
   }
 

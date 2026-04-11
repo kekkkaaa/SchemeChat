@@ -17,7 +17,9 @@ const { createSchemeChatMcpServer } = require('./codex-mcp-server');
 let mainWindow;
 let currentZoomFactor = 1.0;
 let codexBridge;
+let appSettings;
 const pendingPrivateNewChatRequests = new Map();
+const pendingDiscussionControlRequests = new Map();
 const SHARED_PARTITION = 'persist:shared';
 const CHATGPT_PARTITION = getProviderCompatibility('chatgpt').partition;
 const CHATGPT_SESSION_MAINTENANCE_VERSION = 3;
@@ -31,6 +33,10 @@ const CHATGPT_SESSION_STORAGES = [
   'filesystem',
   'websql',
 ];
+const WRITE_TOOLS_ENV_NAME = 'SCHEMECHAT_MCP_ENABLE_WRITE_TOOLS';
+const DEFAULT_APP_SETTINGS = Object.freeze({
+  mcpWriteToolsEnabled: false,
+});
 
 [process.stdout, process.stderr].forEach((stream) => {
   if (!stream) {
@@ -47,6 +53,57 @@ const CHATGPT_SESSION_STORAGES = [
 
 function getChatGptSessionMarkerPath() {
   return path.join(app.getPath('userData'), 'chatgpt-session-reset.json');
+}
+
+function getAppSettingsPath() {
+  return path.join(app.getPath('userData'), 'app-settings.json');
+}
+
+function isTruthyFlag(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function normalizeAppSettings(rawSettings = {}) {
+  return {
+    mcpWriteToolsEnabled: rawSettings?.mcpWriteToolsEnabled === true,
+  };
+}
+
+function loadAppSettings() {
+  const settingsPath = getAppSettingsPath();
+  if (!fs.existsSync(settingsPath)) {
+    return { ...DEFAULT_APP_SETTINGS };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    return normalizeAppSettings(parsed);
+  } catch (error) {
+    console.error('Failed to read app settings:', error);
+    return { ...DEFAULT_APP_SETTINGS };
+  }
+}
+
+function saveAppSettings(nextSettings = {}) {
+  const settingsPath = getAppSettingsPath();
+  const normalized = normalizeAppSettings(nextSettings);
+
+  try {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(normalized, null, 2));
+  } catch (error) {
+    console.error('Failed to save app settings:', error);
+  }
+
+  return normalized;
+}
+
+function getEnvWriteToolsOverrideEnabled() {
+  return isTruthyFlag(process.env[WRITE_TOOLS_ENV_NAME]);
+}
+
+function isMcpWriteToolsEnabled() {
+  return Boolean(appSettings?.mcpWriteToolsEnabled) || getEnvWriteToolsOverrideEnabled();
 }
 
 function readChatGptSessionMarker() {
@@ -301,6 +358,108 @@ function getWorkspaceSnapshot(paneIds) {
   };
 }
 
+function getFallbackLayoutSettingsState() {
+  return {
+    paneCount: 2,
+    layoutMode: windowManager.DEFAULT_LAYOUT_MODE,
+    layoutModes: windowManager.LAYOUT_MODES.map((mode) => ({
+      key: mode,
+      label: mode,
+    })),
+    panes: [],
+  };
+}
+
+function getCurrentLayoutSettingsState() {
+  if (mainWindow && typeof mainWindow.getLayoutSettingsState === 'function') {
+    return mainWindow.getLayoutSettingsState();
+  }
+
+  return getFallbackLayoutSettingsState();
+}
+
+function buildSettingsState(layoutState = getCurrentLayoutSettingsState()) {
+  return {
+    ...layoutState,
+    integrations: {
+      mcpWriteToolsEnabled: Boolean(appSettings?.mcpWriteToolsEnabled),
+      mcpWriteToolsEffective: isMcpWriteToolsEnabled(),
+      mcpWriteToolsForcedByEnv: getEnvWriteToolsOverrideEnabled(),
+    },
+  };
+}
+
+function getDiscussionConsoleWebContents() {
+  const webContents = mainWindow?.mainView?.webContents;
+  if (!webContents || webContents.isDestroyed()) {
+    return null;
+  }
+
+  return webContents;
+}
+
+async function requestDiscussionControl(type, payload = {}, options = {}) {
+  const webContents = getDiscussionConsoleWebContents();
+  if (!webContents) {
+    return {
+      ok: false,
+      message: 'Discussion console is unavailable.',
+    };
+  }
+
+  const requestId = `discussion-control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : 15000;
+
+  return new Promise((resolve) => {
+    const timeoutHandle = setTimeout(() => {
+      pendingDiscussionControlRequests.delete(requestId);
+      resolve({
+        ok: false,
+        message: `Discussion console did not respond in time for ${type}.`,
+      });
+    }, timeoutMs);
+
+    pendingDiscussionControlRequests.set(requestId, {
+      type,
+      resolve,
+      timeoutHandle,
+    });
+
+    try {
+      webContents.send('discussion-control-request', {
+        requestId,
+        type,
+        ...payload,
+      });
+    } catch (error) {
+      clearTimeout(timeoutHandle);
+      pendingDiscussionControlRequests.delete(requestId);
+      resolve({
+        ok: false,
+        message: error?.message || `Failed to send ${type} to the discussion console.`,
+      });
+    }
+  });
+}
+
+async function getDiscussionFlowState() {
+  return requestDiscussionControl('get-state');
+}
+
+async function updateDiscussionFlow(patch = {}) {
+  return requestDiscussionControl('patch-state', { patch });
+}
+
+async function triggerDiscussionAction(action, options = {}) {
+  const waitForCompletion = Boolean(options?.waitForCompletion);
+  return requestDiscussionControl('run-action', {
+    action,
+    waitForCompletion,
+  }, {
+    timeoutMs: waitForCompletion ? 90000 : 15000,
+  });
+}
+
 async function inspectProviderRoundStatusesForPaneIds(paneIds) {
   const paneEntries = getTargetPaneEntries(paneIds);
   if (paneEntries.length === 0) {
@@ -454,7 +613,56 @@ function buildPrivateNewChatResponse(paneEntries, receivedResults) {
   };
 }
 
+async function startCodexBridge() {
+  const nextBridge = createSchemeChatMcpServer({
+    version: app.getVersion(),
+    allowWriteTools: isMcpWriteToolsEnabled(),
+    getWorkspaceSnapshot,
+    inspectRoundStatus: inspectProviderRoundStatusesForPaneIds,
+    captureLatestReplies: captureProviderRoundResultsForPaneIds,
+    getDiscussionFlowState,
+    updateDiscussionFlow,
+    triggerDiscussionAction,
+    injectTextToPanes: sendTextUpdateToPaneIds,
+    submitMessageToPanes: submitMessageToPaneIds,
+  });
+
+  const status = await nextBridge.start();
+  codexBridge = nextBridge;
+  console.log(
+    `SchemeChat Codex MCP server listening on ${status.url} (${status.writeToolsEnabled ? 'read-write' : 'read-only'})`
+  );
+
+  return status;
+}
+
+async function stopCodexBridge() {
+  if (!codexBridge) {
+    return;
+  }
+
+  const activeBridge = codexBridge;
+  codexBridge = null;
+  await activeBridge.stop();
+}
+
+async function restartCodexBridge() {
+  try {
+    await stopCodexBridge();
+  } catch (error) {
+    console.error('Failed to stop SchemeChat Codex MCP server before restart:', error);
+  }
+
+  try {
+    return await startCodexBridge();
+  } catch (error) {
+    console.error('Failed to restart SchemeChat Codex MCP server:', error);
+    return null;
+  }
+}
+
 app.on('ready', async () => {
+  appSettings = loadAppSettings();
   configureTrustedPartition(SHARED_PARTITION);
   configureTrustedPartition(CHATGPT_PARTITION);
 
@@ -469,18 +677,8 @@ app.on('ready', async () => {
   mainWindow = await windowManager.createWindow();
   hideNativeAppMenu(mainWindow);
 
-  codexBridge = createSchemeChatMcpServer({
-    version: app.getVersion(),
-    getWorkspaceSnapshot,
-    inspectRoundStatus: inspectProviderRoundStatusesForPaneIds,
-    captureLatestReplies: captureProviderRoundResultsForPaneIds,
-    injectTextToPanes: sendTextUpdateToPaneIds,
-    submitMessageToPanes: submitMessageToPaneIds,
-  });
-
   try {
-    const status = await codexBridge.start();
-    console.log(`SchemeChat Codex MCP server listening on ${status.url}`);
+    await startCodexBridge();
   } catch (error) {
     console.error('Failed to start SchemeChat Codex MCP server:', error);
     codexBridge = null;
@@ -570,28 +768,56 @@ app.on('ready', async () => {
     return false;
   });
 
-  ipcMain.handle('get-settings-state', async () => {
-    if (mainWindow && typeof mainWindow.getLayoutSettingsState === 'function') {
-      return mainWindow.getLayoutSettingsState();
+  ipcMain.handle('discussion-control-response', async (event, payload = {}) => {
+    const requestId = String(payload?.requestId || '').trim();
+    if (!requestId) {
+      return false;
     }
 
-    return {
-      paneCount: 2,
-      layoutMode: windowManager.DEFAULT_LAYOUT_MODE,
-      layoutModes: windowManager.LAYOUT_MODES.map((mode) => ({
-        key: mode,
-        label: mode,
-      })),
-      panes: [],
-    };
+    const pending = pendingDiscussionControlRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    clearTimeout(pending.timeoutHandle);
+    pendingDiscussionControlRequests.delete(requestId);
+
+    const responsePayload = { ...payload };
+    delete responsePayload.requestId;
+    pending.resolve(responsePayload);
+    return true;
+  });
+
+  ipcMain.handle('get-settings-state', async () => {
+    return buildSettingsState();
   });
 
   ipcMain.handle('apply-settings-layout', async (event, nextSettings) => {
+    const nextPayload = nextSettings && typeof nextSettings === 'object' ? nextSettings : {};
+    let layoutState = getCurrentLayoutSettingsState();
+
     if (mainWindow && typeof mainWindow.applyLayoutSettings === 'function') {
-      return mainWindow.applyLayoutSettings(nextSettings);
+      layoutState = mainWindow.applyLayoutSettings(nextPayload) || layoutState;
     }
 
-    return null;
+    if (Object.prototype.hasOwnProperty.call(nextPayload, 'mcpWriteToolsEnabled')) {
+      const previousEnabled = Boolean(appSettings?.mcpWriteToolsEnabled);
+      const nextEnabled = nextPayload.mcpWriteToolsEnabled === true;
+      if (previousEnabled !== nextEnabled) {
+        appSettings = saveAppSettings({
+          ...appSettings,
+          mcpWriteToolsEnabled: nextEnabled,
+        });
+        await restartCodexBridge();
+      } else if (!appSettings) {
+        appSettings = saveAppSettings({
+          ...DEFAULT_APP_SETTINGS,
+          mcpWriteToolsEnabled: nextEnabled,
+        });
+      }
+    }
+
+    return buildSettingsState(layoutState);
   });
 
   ipcMain.handle('get-discussion-console-expanded', async () => {

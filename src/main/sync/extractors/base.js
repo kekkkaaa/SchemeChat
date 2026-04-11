@@ -56,6 +56,7 @@ function runStructuredMessageInspection(spec) {
     : [];
   const hostPatterns = Array.isArray(spec.hostPatterns) ? spec.hostPatterns : [];
   const minRootTextLength = Number.isFinite(spec.minRootTextLength) ? spec.minRootTextLength : 40;
+  const shortReplyMinLength = Number.isFinite(spec.shortReplyMinLength) ? spec.shortReplyMinLength : 2;
   const anchorAncestorDepth = Number.isFinite(spec.anchorAncestorDepth) ? spec.anchorAncestorDepth : 6;
   const blockSelector = spec.blockSelector
     || 'p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, td, th, code';
@@ -238,7 +239,21 @@ function runStructuredMessageInspection(spec) {
     }
 
     const summary = extractOrderedText(root);
-    return summary.text.length >= minRootTextLength;
+    if (summary.text.length >= minRootTextLength) {
+      return true;
+    }
+
+    if (summary.text.length < shortReplyMinLength) {
+      return false;
+    }
+
+    return rootSelectors.some((selector) => {
+      try {
+        return root.matches(selector);
+      } catch (error) {
+        return false;
+      }
+    });
   }
 
   function collectAnchorRoots() {

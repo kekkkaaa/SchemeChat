@@ -20,6 +20,8 @@
         <div class="section-title">
           <span class="badge badge-codex">Codex</span>接入方式
         </div>
+        <p class="desc"><strong>适用场景</strong>：不管你是打开完整项目，还是客户机器上只有 <code class="ic">SchemeChat.exe</code>，Codex 都是改 <code class="ic">~/.codex/config.toml</code> 这一种方式。</p>
+        <p class="desc"><strong>前提</strong>：先启动 SchemeChat，让本地 MCP 服务运行在 <code class="ic">http://127.0.0.1:3769/mcp</code>。</p>
         <p class="desc">将以下配置粘贴添加到 <code class="ic">~/.codex/config.toml</code>尾部，保存后重启 Codex：</p>
         <div class="code-wrap">
           <pre id="codexSnippet" class="code-block"></pre>
@@ -32,8 +34,9 @@
         <div class="section-title">
           <span class="badge badge-claude">Claude Code</span>接入方式
         </div>
+        <p class="desc"><strong>前提</strong>：先启动 SchemeChat，让本地 MCP 服务运行在 <code class="ic">http://127.0.0.1:3769/mcp</code>。</p>
         <p class="desc">
-          <strong>方式一</strong>：在 SchemeChat <strong>项目根目录</strong>创建
+          <strong>有项目目录时</strong>：如果 Claude Code 正在打开某个项目，可以在那个<strong>项目根目录</strong>创建
           <code class="ic">.mcp.json</code>（重启 Claude Code 生效）：
         </p>
         <div class="code-wrap">
@@ -41,12 +44,31 @@
           <button class="copy-btn" data-key="ccJson" type="button">复制</button>
         </div>
         <p class="desc" style="margin-top:10px;">
-          <strong>方式二</strong>：命令行一次性添加（用户级全局，无需放入项目）：
+          <strong>只有 exe、没有项目目录时</strong>：不要放 <code class="ic">.mcp.json</code>，直接用下面这条命令做<strong>全局一次性接入</strong>：
         </p>
         <div class="code-wrap">
           <pre id="ccCliSnippet" class="code-block"></pre>
           <button class="copy-btn" data-key="ccCli" type="button">复制</button>
         </div>
+        <p class="desc">全局接入通常只需要配置一次；之后只要先启动 SchemeChat，Claude Code 就能连上。</p>
+      </section>
+
+      <section class="help-section">
+        <div class="section-title">场景速记</div>
+        <p class="desc"><strong>只用 SchemeChat.exe 本体</strong>：什么都不用配，直接双击 exe。</p>
+        <p class="desc"><strong>Exe + Codex</strong>：启动 SchemeChat 后，配置一次 <code class="ic">~/.codex/config.toml</code>。</p>
+        <p class="desc"><strong>Exe + Claude Code（无项目）</strong>：启动 SchemeChat 后，执行一次 <code class="ic">claude mcp add ...</code>。</p>
+        <p class="desc"><strong>项目 + Claude Code</strong>：可以用项目根目录里的 <code class="ic">.mcp.json</code>，也可以继续用全局命令。</p>
+      </section>
+
+      <section class="help-section">
+        <div class="section-title">推荐用法</div>
+        <p class="desc">优先使用讨论流程工具，而不是先手动调用底层输入框写入和发送。</p>
+        <p class="desc">写操作工具默认关闭。如需 <code class="ic">update_discussion_flow</code>、<code class="ic">trigger_discussion_action</code> 等能力，请先在应用 <strong>Settings</strong> 中开启 <strong>MCP Write Tools</strong>。这个开关会持久保存，之后正常双击 exe 启动也会按该设置生效。</p>
+        <p class="desc"><strong>get_discussion_flow_state</strong> 用来读当前轮次、Draft、推进模式和下一步可执行动作。</p>
+        <p class="desc"><strong>update_discussion_flow</strong> 用来改 topic / 本轮补充 / draft / runMode，遵守和界面一致的可编辑规则。</p>
+        <p class="desc"><strong>trigger_discussion_action</strong> 会复用 SchemeChat 的自动/手动讨论流程，不再自己重新拼发送、等待和抓取。</p>
+        <p class="desc">长时间自动流程建议把 <code class="ic">waitForCompletion</code> 设为 <code class="ic">false</code>，然后用状态工具继续轮询。</p>
       </section>
 
       <!-- 可用工具 -->
@@ -65,17 +87,29 @@
             <span class="tool-name">capture_latest_replies</span>
             <span class="tool-desc">抓取各面板最新 AI 回复内容</span>
           </div>
+          <div class="tool read">
+            <span class="tool-name">get_discussion_flow_state</span>
+            <span class="tool-desc">查看讨论流程状态、当前 Draft 和下一步动作</span>
+          </div>
+          <div class="tool write">
+            <span class="tool-name">update_discussion_flow</span>
+            <span class="tool-desc">更新 topic、本轮补充、draft 或 runMode</span>
+          </div>
+          <div class="tool write">
+            <span class="tool-name">trigger_discussion_action</span>
+            <span class="tool-desc">触发开始、发送、继续、下一步等高层讨论动作</span>
+          </div>
           <div class="tool write">
             <span class="tool-name">inject_text_to_panes</span>
-            <span class="tool-desc">向指定面板输入框写入文字</span>
+            <span class="tool-desc">低层调试：向指定面板输入框直接写入文字</span>
           </div>
           <div class="tool write">
             <span class="tool-name">submit_message_to_panes</span>
-            <span class="tool-desc">触发发送，让 AI 开始回复</span>
+            <span class="tool-desc">低层调试：直接触发发送</span>
           </div>
           <div class="tool write">
             <span class="tool-name">broadcast_context_to_panes</span>
-            <span class="tool-desc">广播补充上下文，可选自动发送</span>
+            <span class="tool-desc">低层调试：广播补充上下文，可选自动发送</span>
           </div>
         </div>
         <p class="tip">🟢 绿色 = 只读　　🟠 橙色 = 写操作（会影响面板内容）</p>

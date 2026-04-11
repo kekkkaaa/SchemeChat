@@ -73,9 +73,14 @@ const PROVIDERS = {
     name: 'Grok',
   },
 };
+const SWITCHABLE_PROVIDER_KEYS = ['chatgpt', 'gemini', 'grok'];
 
 function normalizeProviderKey(providerKey, fallback) {
   return PROVIDERS[providerKey] ? providerKey : fallback;
+}
+
+function isSwitchableProviderKey(providerKey) {
+  return SWITCHABLE_PROVIDER_KEYS.includes(providerKey);
 }
 
 function normalizeLayoutMode(layoutMode) {
@@ -615,7 +620,7 @@ async function createWindow() {
   attachEditableContextMenu(mainView.webContents);
 
   function getAvailableProviders() {
-    return Object.keys(PROVIDERS).map((key) => ({
+    return SWITCHABLE_PROVIDER_KEYS.filter((key) => PROVIDERS[key]).map((key) => ({
       key,
       name: PROVIDERS[key].name,
     }));
@@ -625,6 +630,7 @@ async function createWindow() {
     return {
       position: paneState.id,
       provider: paneState.providerKey,
+      providerName: PROVIDERS[paneState.providerKey]?.name || paneState.providerKey,
       availableProviders: getAvailableProviders(),
     };
   }
@@ -896,7 +902,7 @@ async function createWindow() {
   }
 
   function changeProvider(paneId, newProviderKey) {
-    if (!PROVIDERS[newProviderKey]) {
+    if (!PROVIDERS[newProviderKey] || !isSwitchableProviderKey(newProviderKey)) {
       return false;
     }
 

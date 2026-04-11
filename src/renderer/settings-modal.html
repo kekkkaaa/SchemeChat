@@ -16,6 +16,7 @@
     <div class="modal-body">
       <aside class="settings-sidebar">
         <button id="screenTabBtn" class="tab-btn active" type="button">Screen</button>
+        <button id="mcpTabBtn" class="tab-btn" type="button">MCP</button>
       </aside>
 
       <main class="settings-content">
@@ -82,12 +83,50 @@
             </div>
             <div id="paneList" class="pane-list"></div>
           </section>
+        </section>
 
-          <div class="panel-footer">
-            <span id="settingsStatus" class="settings-status">Ready</span>
-            <button id="applyBtn" class="apply-btn" type="button">Apply</button>
+        <section id="mcpTabPanel" class="tab-panel">
+          <div class="panel-heading">
+            <div>
+              <h1>MCP</h1>
+              <p>Manage local MCP access for Codex, Claude Code, and other trusted desktop clients.</p>
+            </div>
+          </div>
+
+          <div class="settings-grid settings-grid-mcp">
+            <section class="settings-card integration-card">
+              <div class="card-header">
+                <h2>MCP Write Tools</h2>
+                <span class="card-hint">Codex / Claude Code</span>
+              </div>
+              <label class="toggle-row" for="mcpWriteToolsToggle">
+                <div class="toggle-copy">
+                  <strong>Enable write actions</strong>
+                  <p>Allow MCP clients to update the discussion flow and trigger sends.</p>
+                </div>
+                <input id="mcpWriteToolsToggle" class="toggle-input" type="checkbox" />
+              </label>
+              <p id="mcpWriteToolsHint" class="setting-note">Effective mode: read-only.</p>
+            </section>
+
+            <section class="settings-card">
+              <div class="card-header">
+                <h2>Behavior</h2>
+                <span class="card-hint">Normal app launch</span>
+              </div>
+              <div class="note-list">
+                <p>Read-only tools stay available even when write access is off.</p>
+                <p>Write tools can change discussion state and trigger sends, so only enable them for trusted local clients.</p>
+                <p>The saved setting persists for normal exe launches. Environment overrides only apply when you launch the app that way on purpose.</p>
+              </div>
+            </section>
           </div>
         </section>
+
+        <div class="panel-footer">
+          <span id="settingsStatus" class="settings-status">Ready</span>
+          <button id="applyBtn" class="apply-btn" type="button">Apply</button>
+        </div>
       </main>
     </div>
   </div>

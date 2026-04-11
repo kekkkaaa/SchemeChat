@@ -2,7 +2,9 @@ const { ipcRenderer } = require('electron');
 
 const closeBtn = document.getElementById('closeBtn');
 const screenTabBtn = document.getElementById('screenTabBtn');
+const mcpTabBtn = document.getElementById('mcpTabBtn');
 const screenTabPanel = document.getElementById('screenTabPanel');
+const mcpTabPanel = document.getElementById('mcpTabPanel');
 const decreaseCountBtn = document.getElementById('decreaseCountBtn');
 const increaseCountBtn = document.getElementById('increaseCountBtn');
 const paneCountValue = document.getElementById('paneCountValue');
@@ -13,15 +15,21 @@ const layoutPreview = document.getElementById('layoutPreview');
 const paneList = document.getElementById('paneList');
 const settingsStatus = document.getElementById('settingsStatus');
 const applyBtn = document.getElementById('applyBtn');
+const mcpWriteToolsToggle = document.getElementById('mcpWriteToolsToggle');
+const mcpWriteToolsHint = document.getElementById('mcpWriteToolsHint');
 const modeButtons = Array.from(document.querySelectorAll('.mode-btn'));
 
 const PREVIEW_GAP = 8;
 
+let activeTab = 'screen';
 let appliedState = null;
 let draftState = {
   paneCount: 2,
   layoutMode: 'grid',
   panes: [],
+  mcpWriteToolsEnabled: false,
+  mcpWriteToolsEffective: false,
+  mcpWriteToolsForcedByEnv: false,
 };
 
 function closeSettingsModal() {
@@ -156,6 +164,23 @@ function renderPaneList() {
   });
 }
 
+function renderMcpSettings() {
+  if (!mcpWriteToolsToggle || !mcpWriteToolsHint) {
+    return;
+  }
+
+  mcpWriteToolsToggle.checked = Boolean(draftState.mcpWriteToolsEnabled);
+
+  if (draftState.mcpWriteToolsForcedByEnv) {
+    mcpWriteToolsHint.textContent = 'Effective mode: write enabled by environment override. Normal exe launches will use the saved toggle.';
+    return;
+  }
+
+  mcpWriteToolsHint.textContent = draftState.mcpWriteToolsEffective
+    ? 'Effective mode: read-write. This setting will persist for normal app launches.'
+    : 'Effective mode: read-only. Enable this only if you trust connected MCP clients.';
+}
+
 function hasPendingChanges() {
   if (!appliedState) {
     return true;
@@ -163,35 +188,60 @@ function hasPendingChanges() {
 
   return (
     draftState.paneCount !== appliedState.paneCount ||
-    draftState.layoutMode !== appliedState.layoutMode
+    draftState.layoutMode !== appliedState.layoutMode ||
+    draftState.mcpWriteToolsEnabled !== appliedState.mcpWriteToolsEnabled
   );
 }
 
 function renderApplyState() {
   applyBtn.disabled = false;
   if (hasPendingChanges()) {
-    setStatus('Layout changes are ready to apply.');
+    setStatus('Settings changes are ready to apply.');
   } else {
-    setStatus('No pending layout changes.');
+    setStatus('No pending settings changes.');
   }
 }
 
-function renderScreenPanel() {
-  screenTabBtn.classList.add('active');
-  screenTabPanel.classList.add('active');
+function syncActiveTab() {
+  const showScreen = activeTab === 'screen';
+  screenTabBtn.classList.toggle('active', showScreen);
+  screenTabPanel.classList.toggle('active', showScreen);
+  mcpTabBtn.classList.toggle('active', !showScreen);
+  mcpTabPanel.classList.toggle('active', !showScreen);
+}
+
+function renderSettings() {
+  syncActiveTab();
   renderModeButtons();
   renderSummary();
-  renderPreview();
   renderPaneList();
+  renderMcpSettings();
+  if (activeTab === 'screen') {
+    renderPreview();
+  }
   renderApplyState();
 }
 
+function setActiveTab(nextTab) {
+  activeTab = nextTab === 'mcp' ? 'mcp' : 'screen';
+  renderSettings();
+}
+
 function syncDraftState(nextState) {
-  appliedState = nextState;
+  const integrationState = nextState?.integrations || {};
+  appliedState = {
+    ...nextState,
+    mcpWriteToolsEnabled: Boolean(integrationState.mcpWriteToolsEnabled),
+    mcpWriteToolsEffective: Boolean(integrationState.mcpWriteToolsEffective),
+    mcpWriteToolsForcedByEnv: Boolean(integrationState.mcpWriteToolsForcedByEnv),
+  };
   draftState = {
     paneCount: nextState?.paneCount || 2,
     layoutMode: nextState?.layoutMode || 'grid',
     panes: nextState?.panes || [],
+    mcpWriteToolsEnabled: appliedState.mcpWriteToolsEnabled,
+    mcpWriteToolsEffective: appliedState.mcpWriteToolsEffective,
+    mcpWriteToolsForcedByEnv: appliedState.mcpWriteToolsForcedByEnv,
   };
 }
 
@@ -200,7 +250,7 @@ async function loadSettingsState() {
     const nextState = await ipcRenderer.invoke('get-settings-state');
     syncDraftState(nextState);
     setStatus('Ready');
-    renderScreenPanel();
+    renderSettings();
   } catch (error) {
     console.error('Failed to load settings state:', error);
     setStatus('Failed to load settings.', true);
@@ -209,25 +259,26 @@ async function loadSettingsState() {
 
 async function applySettings() {
   applyBtn.disabled = true;
-  setStatus('Applying layout...');
+  setStatus('Applying settings...');
 
   try {
     const nextState = await ipcRenderer.invoke('apply-settings-layout', {
       paneCount: draftState.paneCount,
       layoutMode: draftState.layoutMode,
+      mcpWriteToolsEnabled: draftState.mcpWriteToolsEnabled,
     });
 
     if (!nextState) {
-      setStatus('Failed to apply layout.', true);
+      setStatus('Failed to apply settings.', true);
       return;
     }
 
     syncDraftState(nextState);
-    setStatus('Layout applied.');
-    renderScreenPanel();
+    setStatus('Settings applied.');
+    renderSettings();
   } catch (error) {
-    console.error('Failed to apply layout:', error);
-    setStatus('Failed to apply layout.', true);
+    console.error('Failed to apply settings:', error);
+    setStatus('Failed to apply settings.', true);
   } finally {
     applyBtn.disabled = false;
   }
@@ -235,19 +286,31 @@ async function applySettings() {
 
 function adjustPaneCount(delta) {
   draftState.paneCount = Math.max(1, draftState.paneCount + delta);
-  renderScreenPanel();
+  renderSettings();
 }
 
 function setLayoutMode(layoutMode) {
   draftState.layoutMode = layoutMode;
-  renderScreenPanel();
+  renderSettings();
+}
+
+function setMcpWriteToolsEnabled(nextEnabled) {
+  draftState.mcpWriteToolsEnabled = Boolean(nextEnabled);
+  draftState.mcpWriteToolsEffective = draftState.mcpWriteToolsForcedByEnv
+    ? appliedState?.mcpWriteToolsEffective === true
+    : draftState.mcpWriteToolsEnabled;
+  renderSettings();
 }
 
 closeBtn.addEventListener('click', closeSettingsModal);
-screenTabBtn.addEventListener('click', renderScreenPanel);
+screenTabBtn.addEventListener('click', () => setActiveTab('screen'));
+mcpTabBtn.addEventListener('click', () => setActiveTab('mcp'));
 decreaseCountBtn.addEventListener('click', () => adjustPaneCount(-1));
 increaseCountBtn.addEventListener('click', () => adjustPaneCount(1));
 applyBtn.addEventListener('click', applySettings);
+mcpWriteToolsToggle.addEventListener('change', (event) => {
+  setMcpWriteToolsEnabled(event.target.checked);
+});
 
 modeButtons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -256,7 +319,9 @@ modeButtons.forEach((button) => {
 });
 
 window.addEventListener('resize', () => {
-  renderPreview();
+  if (activeTab === 'screen') {
+    renderPreview();
+  }
 });
 
 window.addEventListener('keydown', (event) => {
