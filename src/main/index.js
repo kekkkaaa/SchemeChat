@@ -716,6 +716,57 @@ function buildPrivateNewChatResponse(paneEntries, receivedResults) {
   };
 }
 
+async function triggerTemporaryChatsForPaneIds(paneIds) {
+  const supportedProviders = new Set(['grok', 'gemini', 'chatgpt']);
+  const paneEntries = getTargetPaneEntries(paneIds).filter((paneEntry) => {
+    return supportedProviders.has(paneEntry?.view?.providerKey) && paneEntry?.view?.webContents;
+  });
+
+  if (paneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'Temporary chats need at least one Grok, Gemini, or ChatGPT pane.',
+      requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+      resolvedPaneIds: [],
+      results: [],
+    };
+  }
+
+  const requestId = `private-new-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const response = await new Promise((resolve) => {
+    const timeoutHandle = setTimeout(() => {
+      const pending = pendingPrivateNewChatRequests.get(requestId);
+      if (!pending) {
+        return;
+      }
+
+      pendingPrivateNewChatRequests.delete(requestId);
+      resolve(buildPrivateNewChatResponse(pending.paneEntries, pending.results));
+    }, 12000);
+
+    pendingPrivateNewChatRequests.set(requestId, {
+      paneEntries,
+      results: [],
+      resolve,
+      timeoutHandle,
+    });
+
+    paneEntries.forEach((paneEntry) => {
+      paneEntry.view.webContents.send('private-new-chat', {
+        requestId,
+        paneId: paneEntry.id,
+      });
+    });
+  });
+
+  return {
+    ...response,
+    requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+    resolvedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+  };
+}
+
 async function startCodexBridge() {
   const nextBridge = createSchemeChatMcpServer({
     version: app.getVersion(),
@@ -726,6 +777,7 @@ async function startCodexBridge() {
     getDiscussionFlowState,
     updateDiscussionFlow,
     triggerDiscussionAction,
+    openTemporaryChats: triggerTemporaryChatsForPaneIds,
     injectTextToPanes: sendTextUpdateToPaneIds,
     submitMessageToPanes: submitMessageToPaneIds,
   });
@@ -1206,49 +1258,8 @@ app.on('ready', async () => {
     return true;
   });
 
-  ipcMain.handle('private-new-chat', async () => {
-    const supportedProviders = new Set(['grok', 'gemini', 'chatgpt']);
-    const paneEntries = getPaneEntries().filter((paneEntry) => {
-      return supportedProviders.has(paneEntry?.view?.providerKey) && paneEntry?.view?.webContents;
-    });
-
-    if (paneEntries.length === 0) {
-      return {
-        ok: false,
-        message: 'Private New Chat needs at least one Grok, Gemini, or ChatGPT pane.',
-        results: [],
-      };
-    }
-
-    const requestId = `private-new-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    const responsePromise = new Promise((resolve) => {
-      const timeoutHandle = setTimeout(() => {
-        const pending = pendingPrivateNewChatRequests.get(requestId);
-        if (!pending) {
-          return;
-        }
-
-        pendingPrivateNewChatRequests.delete(requestId);
-        resolve(buildPrivateNewChatResponse(pending.paneEntries, pending.results));
-      }, 12000);
-
-      pendingPrivateNewChatRequests.set(requestId, {
-        paneEntries,
-        results: [],
-        resolve,
-        timeoutHandle,
-      });
-    });
-
-    paneEntries.forEach((paneEntry) => {
-      paneEntry.view.webContents.send('private-new-chat', {
-        requestId,
-        paneId: paneEntry.id,
-      });
-    });
-
-    return responsePromise;
+  ipcMain.handle('private-new-chat', async (event, payload = {}) => {
+    return triggerTemporaryChatsForPaneIds(payload?.paneIds);
   });
 
   ipcMain.handle('private-new-chat-result', async (event, payload) => {

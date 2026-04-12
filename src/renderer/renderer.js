@@ -1413,8 +1413,9 @@ async function updateDiscussionControlState(patch = {}) {
   const hasRoundNotePatch = hasOwnPatchValue(normalizedPatch, 'roundNote');
   const hasDraftPatch = hasOwnPatchValue(normalizedPatch, 'draft');
   const hasRunModePatch = hasOwnPatchValue(normalizedPatch, 'runMode');
+  const hasModeIdPatch = hasOwnPatchValue(normalizedPatch, 'modeId');
 
-  if (!hasTopicPatch && !hasRoundNotePatch && !hasDraftPatch && !hasRunModePatch) {
+  if (!hasTopicPatch && !hasRoundNotePatch && !hasDraftPatch && !hasRunModePatch && !hasModeIdPatch) {
     return {
       ok: true,
       message: 'No discussion fields were updated.',
@@ -1446,6 +1447,44 @@ async function updateDiscussionControlState(patch = {}) {
 
     if (previousRunMode !== state.runMode) {
       messages.push(`已切换到${state.runMode === 'auto' ? '自动推进' : '手动推进'}`);
+    }
+  }
+
+  if (hasModeIdPatch) {
+    const nextModeId = String(normalizedPatch.modeId || '').trim();
+    const nextModeOption = MODE_OPTIONS.find((option) => option.id === nextModeId);
+    if (!nextModeOption) {
+      return {
+        ok: false,
+        message: `Unsupported discussion mode: ${nextModeId || 'empty'}.`,
+        state: buildDiscussionControlSnapshot(),
+      };
+    }
+
+    const selectorLocked = syncInFlight
+      || privateNewChatInFlight
+      || isWaitingState()
+      || isAutoPausedState()
+      || isFinishedState()
+      || state.autoRunActive;
+
+    if (selectorLocked && nextModeId !== state.modeId) {
+      return {
+        ok: false,
+        message: 'The current discussion state does not allow switching the round preset right now.',
+        state: buildDiscussionControlSnapshot(),
+      };
+    }
+
+    if (nextModeId !== state.modeId) {
+      state.modeId = nextModeId;
+      if (state.currentRoundNumber > 0) {
+        state.currentRoundType = getRoundTypeLabel(state.currentRoundNumber, nextModeId);
+      }
+      if (isDraftReadyState()) {
+        markDraftStale(`已通过 MCP 切换轮次模式：${nextModeOption.label}`);
+      }
+      messages.push(`已切换到${nextModeOption.label}`);
     }
   }
 

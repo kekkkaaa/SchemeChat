@@ -122,8 +122,9 @@ function createSchemeChatMcpServer(options = {}) {
             roundNote: z.string().optional().describe('Optional per-round note or temporary instruction. Pass an empty string to clear it.'),
             draft: z.string().optional().describe('Optional current draft text. Pass an empty string to clear it.'),
             runMode: z.enum(['manual', 'auto']).optional().describe('Optional discussion run mode to apply before the next action.'),
+            modeId: z.enum(['fast-3', 'standard-4', 'deep-5']).optional().describe('Optional discussion round preset: 3 rounds, 4 rounds, or 5 rounds.'),
           },
-        }, async ({ topic, roundNote, draft, runMode }) => {
+        }, async ({ topic, roundNote, draft, runMode, modeId }) => {
           const patch = {};
           if (topic !== undefined) {
             patch.topic = topic;
@@ -136,6 +137,9 @@ function createSchemeChatMcpServer(options = {}) {
           }
           if (runMode !== undefined) {
             patch.runMode = runMode;
+          }
+          if (modeId !== undefined) {
+            patch.modeId = modeId;
           }
 
           const result = await options.updateDiscussionFlow(patch);
@@ -170,6 +174,19 @@ function createSchemeChatMcpServer(options = {}) {
             waitForCompletion: Boolean(waitForCompletion),
             ...result,
           }, result?.ok === false);
+        });
+      }
+
+      if (typeof options.openTemporaryChats === 'function') {
+        server.registerTool('open_temporary_chats', {
+          title: 'Open Temporary Chats',
+          description: 'High-level session tool: switch supported panes into temporary/private chat before scratch analysis, reducing history pollution.',
+          inputSchema: {
+            paneIds: z.array(z.string()).optional().describe('Optional pane IDs to target. Empty means all supported panes.'),
+          },
+        }, async ({ paneIds = [] }) => {
+          const result = await options.openTemporaryChats(paneIds);
+          return createTextToolResult('SchemeChat temporary chat result', result, result?.ok === false);
         });
       }
 

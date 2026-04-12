@@ -51,7 +51,7 @@ launcher 是默认入口，完整工作台是深入编辑入口。
 - 主按钮文案必须直接对应当前下一步
 - footer 状态先说结果，再说是否需要继续操作
 - launcher 文案短于展开态文案
-- 详细规则 follow `product/discussion_console_copy_guidelines_2026-04-08.md`
+- 详细规则直接 follow 当前讨论工作台主文档，不再单独拆文案规范文档
 
 ---
 
