@@ -32,12 +32,17 @@ const {
   getSkippablePaneIdsFromTracks,
   mergeRoundResults,
   settleInspectionResults,
+  shouldAttemptStableCapture,
 } = require('./discussion-auto-run');
 const {
-  deriveHeaderState,
-  deriveActionButtonState,
-  deriveInputState,
+  buildDiscussionUiStateModel: buildDiscussionUiStateModelFromViewState,
 } = require('./discussion-view-state');
+const { renderRoundHistory: renderRoundHistoryView } = require('./discussion-history-view');
+const { createDiscussionControlBridge } = require('./discussion-control-bridge');
+const {
+  handleRoundFlowError,
+  updateProviderTrackStatuses,
+} = require('./discussion-runtime-helpers');
 
 const state = {
   isPanelExpanded: false,
@@ -376,104 +381,6 @@ function createStaticChip(label, className = '') {
 function syncTextareaValue(element, value) {
   if (element.value !== value) {
     element.value = value;
-  }
-}
-
-function getDraftStateLabel() {
-  if (isDraftPreparingState()) {
-    return '生成中';
-  }
-
-  if (isDispatchingState()) {
-    return '发送中';
-  }
-
-  if (isWaitingState()) {
-    return '等待中';
-  }
-
-  if (isReviewState()) {
-    return '已完成';
-  }
-
-  if (isSummarizerSelectingState()) {
-    return '待确认';
-  }
-
-  if (isPartialErrorState()) {
-    return '局部异常';
-  }
-
-  if (isAutoPausedState()) {
-    return '自动暂停';
-  }
-
-  if (isGlobalErrorState()) {
-    return '流程异常';
-  }
-
-  if (isFinishedState()) {
-    return '最终方案';
-  }
-
-  if (!isDraftReadyState()) {
-    return '待生成';
-  }
-
-  if (state.draftNeedsRefresh) {
-    return '需刷新';
-  }
-
-  return state.draftSent ? '已发送' : '可发送';
-}
-
-function getSendButtonLabel(roundType = state.currentRoundType) {
-  switch (roundType) {
-    case '首轮分析':
-      return '发送首轮';
-    case '交叉讨论':
-      return '发送交叉讨论';
-    case '交叉质疑':
-      return '发送交叉质疑';
-    case '修正方案':
-      return '发送修正方案';
-    case '分歧压缩':
-      return '发送压缩轮';
-    case '确认总结者':
-      return '发送确认轮';
-    case '最终总结':
-      return '发送最终总结';
-    default:
-      return '发送本轮';
-  }
-}
-
-function getRoundReviewPrimaryLabel() {
-  const mode = getModeOption();
-  if (state.currentRoundNumber >= mode.totalRounds) {
-    return '完成讨论';
-  }
-
-  const nextRoundNumber = state.currentRoundNumber + 1;
-  const promptType = getAutoPromptType(nextRoundNumber, mode.id);
-  if (promptType === 'final-summary') {
-    return '进入总结者选择';
-  }
-
-  const nextRoundType = getRoundTypeLabel(nextRoundNumber);
-  switch (nextRoundType) {
-    case '交叉讨论':
-      return '开始交叉讨论';
-    case '交叉质疑':
-      return '开始交叉质疑';
-    case '修正方案':
-      return '进入修正轮';
-    case '分歧压缩':
-      return '进入压缩轮';
-    case '确认总结者':
-      return '进入确认轮';
-    default:
-      return `进入${nextRoundType}`;
   }
 }
 
@@ -992,91 +899,15 @@ function renderSupportSummaries() {
 }
 
 function renderRoundHistory() {
-  const roundHistory = getSortedRoundHistory();
-  refs.roundHistoryList.innerHTML = '';
-
-  if (roundHistory.length === 0) {
-    refs.roundHistorySummaryText.textContent = '\u8fd8\u6ca1\u6709\u5df2\u5b8c\u6210\u8f6e\u6b21';
-    refs.roundHistoryCountBadge.textContent = '0 \u8f6e';
-    refs.roundHistoryList.appendChild(createStaticChip('\u7b49\u5f85\u9996\u8f6e\u5b8c\u6210', 'is-empty'));
-    return;
-  }
-
-  refs.roundHistorySummaryText.textContent = isFinishedState()
-    ? '\u6574\u573a\u8ba8\u8bba\u5df2\u5b8c\u6210\uff0c\u53ef\u56de\u770b\u5404\u8f6e\u7ed3\u679c'
-    : `\u5df2\u5b8c\u6210 ${roundHistory.length} \u8f6e\uff0c\u53ef\u56de\u770b\u7a33\u5b9a\u7ed3\u679c`;
-  refs.roundHistoryCountBadge.textContent = `${roundHistory.length} \u8f6e`;
-
-  roundHistory.forEach((roundEntry) => {
-    const card = document.createElement('article');
-    const isFinalRound = roundEntry.roundType === '\u6700\u7ec8\u603b\u7ed3';
-    card.className = `round-history-card${isFinalRound ? ' is-final' : ''}`;
-
-    const header = document.createElement('div');
-    header.className = 'round-history-card-header';
-
-    const title = document.createElement('span');
-    title.className = 'round-history-card-title';
-    title.textContent = `\u7b2c ${roundEntry.roundNumber} \u8f6e / ${roundEntry.roundType}`;
-
-    const meta = document.createElement('span');
-    meta.className = 'round-history-card-meta';
-    const skippedPaneIds = Array.isArray(roundEntry.skippedPaneIds) ? roundEntry.skippedPaneIds : [];
-    meta.textContent = skippedPaneIds.length > 0
-      ? `${Array.isArray(roundEntry.results) ? roundEntry.results.length : 0} \u6761\u7ed3\u679c / \u8df3\u8fc7 ${skippedPaneIds.length} \u4e2a`
-      : `${Array.isArray(roundEntry.results) ? roundEntry.results.length : 0} \u6761\u7ed3\u679c`;
-
-    header.appendChild(title);
-    header.appendChild(meta);
-    card.appendChild(header);
-
-    const entryList = document.createElement('div');
-    entryList.className = 'round-history-entry-list';
-
-    (Array.isArray(roundEntry.results) ? roundEntry.results : []).forEach((result) => {
-      const entry = document.createElement('div');
-      const summarizerPaneId = roundEntry.summarizerPaneId || state.summarizerPaneId;
-      const isSummarizerResult = Boolean(summarizerPaneId) && result.paneId === summarizerPaneId;
-      entry.className = `round-history-entry${isSummarizerResult ? ' is-summarizer' : ''}`;
-
-      const entryHead = document.createElement('div');
-      entryHead.className = 'round-history-entry-head';
-
-      const label = document.createElement('span');
-      label.className = 'round-history-entry-label';
-      label.textContent = result.providerName || '\u672a\u77e5 AI';
-
-      const entryMeta = document.createElement('span');
-      entryMeta.className = 'round-history-entry-meta';
-      entryMeta.textContent = isSummarizerResult
-        ? '\u603b\u7ed3\u8005'
-        : (result.sourceMethod ? `\u6765\u6e90\uff1a${result.sourceMethod}` : '\u5df2\u5b8c\u6210');
-
-      const body = document.createElement('div');
-      body.className = 'round-history-entry-body';
-      body.textContent = summarizeText(result.latestReplyText || '', 180);
-      body.title = result.latestReplyText || '';
-
-      entryHead.appendChild(label);
-      entryHead.appendChild(entryMeta);
-      entry.appendChild(entryHead);
-      entry.appendChild(body);
-      entryList.appendChild(entry);
-    });
-
-    card.appendChild(entryList);
-
-    if (skippedPaneIds.length > 0) {
-      const skipNote = document.createElement('div');
-      skipNote.className = 'round-history-skip-note';
-      const skippedLabels = skippedPaneIds.map((paneId) => {
-        return getPaneEntryById(paneId)?.providerName || getProviderTrack(paneId)?.providerName || '\u672a\u77e5 AI';
-      });
-      skipNote.textContent = `\u672c\u8f6e\u8df3\u8fc7\uff1a${skippedLabels.join(' / ')}`;
-      card.appendChild(skipNote);
-    }
-
-    refs.roundHistoryList.appendChild(card);
+  renderRoundHistoryView({
+    refs,
+    roundHistory: getSortedRoundHistory(),
+    isFinished: isFinishedState(),
+    summarizerPaneId: state.summarizerPaneId,
+    createStaticChip,
+    getPaneEntryById,
+    getProviderTrack,
+    summarizeText,
   });
 }
 
@@ -1110,36 +941,50 @@ function renderPanelVisibility() {
   refs.floatingPanel.classList.toggle('hidden', !state.isPanelExpanded);
 }
 
-function renderHeader() {
+function getCanReset() {
+  return isDraftReadyState()
+    || Boolean(state.topic.trim())
+    || Boolean(state.roundNote.trim())
+    || state.quickPromptIds.length > 0;
+}
+
+function buildDiscussionUiStateModel() {
   const mode = getModeOption();
   const taskType = getTaskTypeOption();
   const roundNumber = state.currentRoundNumber || 0;
   const roundType = state.currentRoundType || getRoundTypeLabel(roundNumber);
+  const nextRoundNumber = roundNumber + 1;
   const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
-  const headerState = deriveHeaderState({
-    modeLabel: mode.label,
-    modeDescription: mode.description,
-    modeSummary: mode.summary,
-    runModeLabel: getRunModeLabel(),
-    taskTypeLabel: taskType.label,
-    artifactLabel: taskType.artifactLabel,
-    artifactGoal: taskType.artifactGoal,
-    roundNumber,
-    totalRounds: mode.totalRounds,
-    roundType,
-    stateLabel: getDraftStateLabel(),
-    topicSummary: state.topic.trim() ? summarizeText(state.topic, 32) : '',
-    paneCount: getPaneEntries().length,
+
+  return buildDiscussionUiStateModelFromViewState({
+    mode,
+    taskType,
+    topic: state.topic,
+    roundNote: state.roundNote,
+    draft: state.draft,
     runMode: state.runMode,
-    summarizerLabel: getResolvedSummarizerLabel(),
-    hasResolvedSummarizer: Boolean(summarizerPaneId),
+    runModeLabel: getRunModeLabel(),
+    roundNumber,
+    roundType,
+    nextRoundType: getRoundTypeLabel(nextRoundNumber),
+    nextPromptType: getAutoPromptType(nextRoundNumber, mode.id),
+    paneCount: getPaneEntries().length,
+    topicSummary: state.topic.trim() ? summarizeText(state.topic, 32) : '',
     feedbackMessage: state.feedbackMessage,
     autoPauseReason: state.autoPauseReason,
     roundGoalLabel: getRoundGoalLabel(roundType),
-    roundReviewPrimaryLabel: getRoundReviewPrimaryLabel(),
-    sendButtonLabel: getSendButtonLabel(roundType),
     draftSent: state.draftSent,
     draftNeedsRefresh: state.draftNeedsRefresh,
+    controlsBusy: syncInFlight || privateNewChatInFlight,
+    canSkipProblemPanes: getCanSkipProblemPanes(),
+    canReset: getCanReset(),
+    autoRunActive: state.autoRunActive,
+    globalErrorResumeAction: state.globalErrorResumeAction,
+    expectedPaneCount: state.expectedPaneIds.length,
+    summarizerPaneId,
+    summarizerLabel: getResolvedSummarizerLabel(),
+    hasResolvedSummarizer: Boolean(summarizerPaneId),
+    consoleState: state.consoleState,
     isPreparing: isDraftPreparingState(),
     isDispatching: isDispatchingState(),
     isWaiting: isWaitingState(),
@@ -1151,6 +996,11 @@ function renderHeader() {
     isFinished: isFinishedState(),
     isDraftReady: isDraftReadyState(),
   });
+}
+
+function renderHeader(uiState) {
+  const headerState = uiState.headerState;
+  const taskType = uiState.taskType;
 
   refs.modeBadge.textContent = headerState.modeBadgeText;
   refs.dockModeBadge.textContent = headerState.dockModeBadgeText;
@@ -1184,49 +1034,8 @@ function renderHeader() {
   refs.draftPanel.classList.toggle('hidden', headerState.draftPanelHidden);
 }
 
-function renderActionButtons() {
-  const hasPanes = getPaneEntries().length > 0;
-  const hasTopic = Boolean(state.topic.trim());
-  const hasDraft = Boolean(state.draft.trim());
-  const controlsBusy = syncInFlight || privateNewChatInFlight;
-  const isPreparing = isDraftPreparingState();
-  const isDispatching = isDispatchingState();
-  const isWaiting = isWaitingState();
-  const isSummarizerSelecting = isSummarizerSelectingState();
-  const isPartialError = isPartialErrorState();
-  const isAutoPaused = isAutoPausedState();
-  const isGlobalError = isGlobalErrorState();
-  const isRoundReview = isReviewState();
-  const isFinished = isFinishedState();
-  const canSkipProblemPanes = getCanSkipProblemPanes();
-  const canReset = isDraftReadyState()
-    || hasTopic
-    || Boolean(state.roundNote.trim())
-    || state.quickPromptIds.length > 0;
-
-  const actionState = deriveActionButtonState({
-    controlsBusy,
-    hasPanes,
-    hasTopic,
-    hasDraft,
-    canSkipProblemPanes,
-    canReset,
-    autoRunActive: state.autoRunActive,
-    currentRoundNumber: state.currentRoundNumber,
-    globalErrorResumeAction: state.globalErrorResumeAction,
-    expectedPaneCount: state.expectedPaneIds.length,
-    hasResolvedSummarizer: Boolean(getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId()),
-    isPreparing,
-    isDispatching,
-    isWaiting,
-    isSummarizerSelecting,
-    isPartialError,
-    isAutoPaused,
-    isGlobalError,
-    isRoundReview,
-    isFinished,
-    isDraftReady: isDraftReadyState(),
-  });
+function renderActionButtons(uiState) {
+  const actionState = uiState.actionState;
 
   refs.launcherPrimaryBtn.disabled = actionState.primaryDisabled;
   refs.panelPrimaryBtn.disabled = refs.launcherPrimaryBtn.disabled;
@@ -1242,17 +1051,8 @@ function renderActionButtons() {
   refs.panelRunModeBtn.disabled = refs.launcherRunModeBtn.disabled;
 }
 
-function renderInputs() {
-  const inputState = deriveInputState({
-    topic: state.topic,
-    roundNote: state.roundNote,
-    draft: state.draft,
-    isDraftReady: isDraftReadyState(),
-    isPreparing: isDraftPreparingState(),
-    isDispatching: isDispatchingState(),
-    isWaiting: isWaitingState(),
-    isSummarizerSelecting: isSummarizerSelectingState(),
-  });
+function renderInputs(uiState) {
+  const inputState = uiState.inputState;
 
   syncTextareaValue(refs.topicInput, inputState.topicValue);
   syncTextareaValue(refs.roundNoteInput, inputState.roundNoteValue);
@@ -1264,599 +1064,54 @@ function renderInputs() {
   refs.dockInput.disabled = inputState.dockDisabled;
 }
 
-function buildDiscussionUiStateModel() {
-  const mode = getModeOption();
-  const taskType = getTaskTypeOption();
-  const artifact = {
-    label: taskType?.artifactLabel || '',
-    goal: taskType?.artifactGoal || '',
-  };
-  const roundNumber = state.currentRoundNumber || 0;
-  const roundType = state.currentRoundType || getRoundTypeLabel(roundNumber);
-  const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
-  const hasPanes = getPaneEntries().length > 0;
-  const hasTopic = Boolean(state.topic.trim());
-  const hasDraft = Boolean(state.draft.trim());
-  const controlsBusy = syncInFlight || privateNewChatInFlight;
-  const actionState = deriveActionButtonState({
-    controlsBusy,
-    hasPanes,
-    hasTopic,
-    hasDraft,
-    canSkipProblemPanes: getCanSkipProblemPanes(),
-    canReset: isDraftReadyState()
-      || hasTopic
-      || Boolean(state.roundNote.trim())
-      || state.quickPromptIds.length > 0,
-    autoRunActive: state.autoRunActive,
-    currentRoundNumber: state.currentRoundNumber,
-    globalErrorResumeAction: state.globalErrorResumeAction,
-    expectedPaneCount: state.expectedPaneIds.length,
-    hasResolvedSummarizer: Boolean(summarizerPaneId),
-    isPreparing: isDraftPreparingState(),
-    isDispatching: isDispatchingState(),
-    isWaiting: isWaitingState(),
-    isSummarizerSelecting: isSummarizerSelectingState(),
-    isPartialError: isPartialErrorState(),
-    isAutoPaused: isAutoPausedState(),
-    isGlobalError: isGlobalErrorState(),
-    isRoundReview: isReviewState(),
-    isFinished: isFinishedState(),
-    isDraftReady: isDraftReadyState(),
-  });
-  const inputState = deriveInputState({
-    topic: state.topic,
-    roundNote: state.roundNote,
-    draft: state.draft,
-    isDraftReady: isDraftReadyState(),
-    isPreparing: isDraftPreparingState(),
-    isDispatching: isDispatchingState(),
-    isWaiting: isWaitingState(),
-    isSummarizerSelecting: isSummarizerSelectingState(),
-  });
-  const headerState = deriveHeaderState({
-    modeLabel: mode.label,
-    modeDescription: mode.description,
-    modeSummary: mode.summary,
-    runModeLabel: getRunModeLabel(),
-    taskTypeLabel: taskType.label,
-    artifactLabel: artifact.label,
-    artifactGoal: artifact.goal,
-    roundNumber,
-    totalRounds: mode.totalRounds,
-    roundType,
-    stateLabel: getDraftStateLabel(),
-    topicSummary: state.topic.trim() ? summarizeText(state.topic, 32) : '',
-    paneCount: getPaneEntries().length,
-    runMode: state.runMode,
-    summarizerLabel: getResolvedSummarizerLabel(),
-    hasResolvedSummarizer: Boolean(summarizerPaneId),
-    feedbackMessage: state.feedbackMessage,
-    autoPauseReason: state.autoPauseReason,
-    roundGoalLabel: getRoundGoalLabel(roundType),
-    roundReviewPrimaryLabel: getRoundReviewPrimaryLabel(),
-    sendButtonLabel: getSendButtonLabel(roundType),
-    draftSent: state.draftSent,
-    draftNeedsRefresh: state.draftNeedsRefresh,
-    isPreparing: isDraftPreparingState(),
-    isDispatching: isDispatchingState(),
-    isWaiting: isWaitingState(),
-    isReview: isReviewState(),
-    isSummarizerSelecting: isSummarizerSelectingState(),
-    isPartialError: isPartialErrorState(),
-    isAutoPaused: isAutoPausedState(),
-    isGlobalError: isGlobalErrorState(),
-    isFinished: isFinishedState(),
-    isDraftReady: isDraftReadyState(),
-  });
-
-  return {
-    mode,
-    taskType,
-    artifact,
-    roundNumber,
-    roundType,
-    summarizerPaneId,
-    hasPanes,
-    hasTopic,
-    hasDraft,
-    actionState,
-    inputState,
-    headerState,
-  };
-}
-
-function buildDiscussionAvailableActions(uiState = buildDiscussionUiStateModel()) {
-  const availableActions = [];
-
-  if (!uiState.actionState.primaryDisabled) {
-    availableActions.push('primary');
-  }
-  if (!uiState.actionState.regenerateDraftDisabled) {
-    availableActions.push('regenerate-draft');
-  }
-  if (!uiState.actionState.resetConsoleDisabled) {
-    availableActions.push('reset-console');
-  }
-  if (state.consoleState === 'idle' && uiState.hasTopic) {
-    availableActions.push('generate-round-one');
-  }
-  if (state.consoleState === 'idle' && state.runMode === 'auto' && uiState.hasTopic && uiState.hasPanes) {
-    availableActions.push('start-auto-run');
-  }
-  if (isDraftReadyState() && uiState.hasDraft && getDraftPaneIds().length > 0) {
-    availableActions.push('submit-current-draft');
-  }
-  if (isReviewState() && state.runMode === 'manual') {
-    availableActions.push('prepare-next-manual-round');
-  }
-  if (isSummarizerSelectingState() && Boolean(uiState.summarizerPaneId)) {
-    availableActions.push('confirm-summarizer');
-  }
-  if (isAutoPausedState()) {
-    availableActions.push('resume-auto-run');
-  }
-
-  return [...new Set(availableActions)];
-}
+const discussionControlBridge = createDiscussionControlBridge({
+  state,
+  MODE_OPTIONS,
+  TASK_TYPE_OPTIONS,
+  buildDiscussionUiStateModel,
+  render,
+  refreshIdleFeedback,
+  markDraftStale,
+  setRunMode,
+  isPresetSelectorLocked,
+  getRoundTypeLabel,
+  getDraftPaneIds,
+  getPaneEntries,
+  getProviderTrack,
+  createProviderTrack,
+  summarizeText,
+  getResolvedSummarizerLabel,
+  isDraftReadyState,
+  isReviewState,
+  isAutoPausedState,
+  isSummarizerSelectingState,
+  handlePrimaryAction,
+  generateRoundOneDraft,
+  submitCurrentDraft,
+  prepareNextManualRound,
+  startAutoRun,
+  resumeAutoRun,
+  regenerateDraft,
+  confirmSummarizerAndPrepareFinalRound,
+  resetConsoleToIdle,
+  mirrorDraftToTargetPanes,
+  setFeedback,
+});
 
 function buildDiscussionControlSnapshot() {
-  const uiState = buildDiscussionUiStateModel();
-  const draftPaneIdSet = new Set(getDraftPaneIds());
-  const expectedPaneIdSet = new Set(state.expectedPaneIds);
-  const summarizerPaneId = uiState.summarizerPaneId || '';
-
-  return {
-    ok: true,
-    discussionConsoleExpanded: state.isPanelExpanded,
-    consoleState: state.consoleState,
-    runMode: state.runMode,
-    taskType: {
-      id: state.taskTypeId,
-      label: uiState.taskType.label,
-      developerLabel: uiState.taskType.developerLabel,
-      description: uiState.taskType.description,
-      artifactLabel: uiState.taskType.artifactLabel,
-      artifactGoal: uiState.taskType.artifactGoal,
-    },
-    artifact: {
-      label: uiState.artifact.label,
-      goal: uiState.artifact.goal,
-    },
-    modeId: state.modeId,
-    modeLabel: uiState.mode.label,
-    totalRounds: uiState.mode.totalRounds,
-    currentRoundNumber: uiState.roundNumber,
-    currentRoundType: uiState.roundType,
-    topic: state.topic,
-    roundNote: state.roundNote,
-    draft: state.draft,
-    draftPromptType: state.draftPromptType,
-    draftSent: state.draftSent,
-    draftNeedsRefresh: state.draftNeedsRefresh,
-    autoRunActive: state.autoRunActive,
-    autoPauseReason: state.autoPauseReason,
-    autoPauseMeta: state.autoPauseMeta,
-    feedbackMessage: state.feedbackMessage,
-    feedbackMeta: state.feedbackMeta,
-    draftPaneIds: getDraftPaneIds(),
-    expectedPaneIds: [...state.expectedPaneIds],
-    roundHistoryCount: state.roundHistory.length,
-    summarizer: {
-      paneId: summarizerPaneId,
-      providerName: summarizerPaneId ? getResolvedSummarizerLabel() : '',
-      selectionSource: state.summarizerSelectionSource,
-    },
-    primaryAction: {
-      action: 'primary',
-      label: uiState.headerState.launcherPrimaryText,
-      disabled: uiState.actionState.primaryDisabled,
-    },
-    inputs: {
-      inputEditable: uiState.inputState.inputEditable,
-      draftEditable: uiState.inputState.draftEditable,
-      dockDisabled: uiState.inputState.dockDisabled,
-    },
-    actions: {
-      available: buildDiscussionAvailableActions(uiState),
-      runModeDisabled: uiState.actionState.runModeDisabled,
-      regenerateDraftDisabled: uiState.actionState.regenerateDraftDisabled,
-      resetConsoleDisabled: uiState.actionState.resetConsoleDisabled,
-      syncDisabled: uiState.actionState.syncDisabled,
-      privateDisabled: uiState.actionState.privateDisabled,
-      skipDisabled: uiState.actionState.skipDisabled,
-    },
-    panes: getPaneEntries().map((pane) => {
-      const track = getProviderTrack(pane.id) || createProviderTrack(pane);
-      return {
-        paneId: pane.id,
-        providerKey: pane.providerKey,
-        providerName: pane.providerName,
-        status: track.status,
-        error: track.error,
-        hasLatestReply: Boolean(track.latestReplyText),
-        latestReplyPreview: track.latestReplyText ? summarizeText(track.latestReplyText, 120) : '',
-        isDraftTarget: draftPaneIdSet.has(pane.id),
-        isExpectedTarget: expectedPaneIdSet.has(pane.id),
-        isSummarizer: summarizerPaneId === pane.id,
-      };
-    }),
-  };
-}
-
-function hasOwnPatchValue(target, key) {
-  return Object.prototype.hasOwnProperty.call(target, key);
-}
-
-async function updateDiscussionControlState(patch = {}) {
-  const normalizedPatch = patch && typeof patch === 'object' ? patch : {};
-  const hasTopicPatch = hasOwnPatchValue(normalizedPatch, 'topic');
-  const hasRoundNotePatch = hasOwnPatchValue(normalizedPatch, 'roundNote');
-  const hasDraftPatch = hasOwnPatchValue(normalizedPatch, 'draft');
-  const hasRunModePatch = hasOwnPatchValue(normalizedPatch, 'runMode');
-  const hasModeIdPatch = hasOwnPatchValue(normalizedPatch, 'modeId');
-  const hasTaskTypePatch = hasOwnPatchValue(normalizedPatch, 'taskType') || hasOwnPatchValue(normalizedPatch, 'taskTypeId');
-
-  if (!hasTopicPatch && !hasRoundNotePatch && !hasDraftPatch && !hasRunModePatch && !hasModeIdPatch && !hasTaskTypePatch) {
-    return {
-      ok: true,
-      message: 'No discussion fields were updated.',
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  const messages = [];
-
-  if (hasRunModePatch) {
-    const nextRunMode = String(normalizedPatch.runMode || '').trim();
-    if (!['manual', 'auto'].includes(nextRunMode)) {
-      return {
-        ok: false,
-        message: `Unsupported discussion run mode: ${nextRunMode || 'empty'}.`,
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    const previousRunMode = state.runMode;
-    setRunMode(nextRunMode);
-    if (state.runMode !== nextRunMode) {
-      return {
-        ok: false,
-        message: 'The current discussion state does not allow switching run mode right now.',
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    if (previousRunMode !== state.runMode) {
-      messages.push(`已切换到${state.runMode === 'auto' ? '自动推进' : '手动推进'}`);
-    }
-  }
-
-  if (hasModeIdPatch) {
-    const nextModeId = String(normalizedPatch.modeId || '').trim();
-    const nextModeOption = MODE_OPTIONS.find((option) => option.id === nextModeId);
-    if (!nextModeOption) {
-      return {
-        ok: false,
-        message: `Unsupported discussion intensity preset: ${nextModeId || 'empty'}.`,
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    const selectorLocked = syncInFlight
-      || privateNewChatInFlight
-      || isWaitingState()
-      || isAutoPausedState()
-      || isFinishedState()
-      || state.autoRunActive;
-
-    if (selectorLocked && nextModeId !== state.modeId) {
-      return {
-        ok: false,
-        message: 'The current discussion state does not allow switching the discussion intensity right now.',
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    if (nextModeId !== state.modeId) {
-      state.modeId = nextModeId;
-      if (state.currentRoundNumber > 0) {
-        state.currentRoundType = getRoundTypeLabel(state.currentRoundNumber, nextModeId);
-      }
-      if (isDraftReadyState()) {
-        markDraftStale(`已通过 MCP 切换讨论强度：${nextModeOption.label}`);
-      }
-      messages.push(`已切换到${nextModeOption.label}`);
-    }
-  }
-
-  if (hasTaskTypePatch) {
-    const nextTaskTypeId = String(
-      hasOwnPatchValue(normalizedPatch, 'taskType')
-        ? normalizedPatch.taskType
-        : normalizedPatch.taskTypeId
-    ).trim();
-    const nextTaskTypeOption = TASK_TYPE_OPTIONS.find((option) => option.id === nextTaskTypeId);
-    if (!nextTaskTypeOption) {
-      return {
-        ok: false,
-        message: `Unsupported discussion task type: ${nextTaskTypeId || 'empty'}.`,
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    const selectorLocked = isPresetSelectorLocked();
-    if (selectorLocked && nextTaskTypeId !== state.taskTypeId) {
-      return {
-        ok: false,
-        message: 'The current discussion state does not allow switching the task type right now.',
-        state: buildDiscussionControlSnapshot(),
-      };
-    }
-
-    if (nextTaskTypeId !== state.taskTypeId) {
-      state.taskTypeId = nextTaskTypeId;
-      if (isDraftReadyState()) {
-        markDraftStale(`已通过 MCP 切换任务类型：${nextTaskTypeOption.label}`);
-      }
-      messages.push(`已切换到${nextTaskTypeOption.label}`);
-    }
-  }
-
-  const uiState = buildDiscussionUiStateModel();
-  if ((hasTopicPatch || hasRoundNotePatch) && !uiState.inputState.inputEditable) {
-    return {
-      ok: false,
-      message: 'The current discussion state does not allow editing the topic or round note.',
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  if (hasDraftPatch && !uiState.inputState.draftEditable) {
-    return {
-      ok: false,
-      message: 'The current discussion state does not allow editing the current draft.',
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  if (hasTopicPatch) {
-    state.topic = String(normalizedPatch.topic ?? '');
-    if (isDraftReadyState()) {
-      markDraftStale('已通过 MCP 更新讨论主题');
-    }
-    messages.push('已更新讨论主题');
-  }
-
-  if (hasRoundNotePatch) {
-    state.roundNote = String(normalizedPatch.roundNote ?? '');
-    if (isDraftReadyState()) {
-      markDraftStale('已通过 MCP 更新本轮补充');
-    }
-    messages.push('已更新本轮补充');
-  }
-
-  if (hasDraftPatch) {
-    state.draft = String(normalizedPatch.draft ?? '');
-    state.draftSent = false;
-    state.draftNeedsRefresh = false;
-    messages.push('已更新当前 Draft');
-  }
-
-  render();
-
-  if (hasTopicPatch || hasRoundNotePatch || hasTaskTypePatch) {
-    refreshIdleFeedback();
-  }
-
-  if (hasDraftPatch) {
-    mirrorDraftToTargetPanes();
-  }
-
-  return {
-    ok: true,
-    message: messages.length > 0 ? `${messages.join('；')}。` : 'Discussion state already matched the requested values.',
-    state: buildDiscussionControlSnapshot(),
-  };
-}
-
-function getDiscussionControlActionLabel(action, uiState = buildDiscussionUiStateModel()) {
-  switch (action) {
-    case 'primary':
-      return uiState.headerState.launcherPrimaryText || '主动作';
-    case 'generate-round-one':
-      return '生成首轮 Draft';
-    case 'submit-current-draft':
-      return '发送当前 Draft';
-    case 'prepare-next-manual-round':
-      return '准备下一手动轮';
-    case 'start-auto-run':
-      return '启动自动推进';
-    case 'resume-auto-run':
-      return '继续自动推进';
-    case 'regenerate-draft':
-      return '重生成 Draft';
-    case 'confirm-summarizer':
-      return '确认总结者';
-    case 'reset-console':
-      return '重置讨论台';
-    default:
-      return action || '未知动作';
-  }
-}
-
-function validateDiscussionControlAction(action, uiState = buildDiscussionUiStateModel()) {
-  switch (action) {
-    case 'primary':
-      return uiState.actionState.primaryDisabled
-        ? { ok: false, message: `当前状态下不能执行：${getDiscussionControlActionLabel(action, uiState)}。` }
-        : { ok: true };
-    case 'generate-round-one':
-      return state.consoleState !== 'idle' || !uiState.hasTopic
-        ? { ok: false, message: '当前状态下不能单独生成首轮 Draft。' }
-        : { ok: true };
-    case 'submit-current-draft':
-      return !isDraftReadyState() || !uiState.hasDraft || getDraftPaneIds().length === 0
-        ? { ok: false, message: '当前没有可发送的 Draft。' }
-        : { ok: true };
-    case 'prepare-next-manual-round':
-      return !isReviewState() || state.runMode !== 'manual'
-        ? { ok: false, message: '当前状态下不能单独准备下一手动轮。' }
-        : { ok: true };
-    case 'start-auto-run':
-      return state.runMode !== 'auto' || state.consoleState !== 'idle' || !uiState.hasTopic || !uiState.hasPanes
-        ? { ok: false, message: '当前状态下不能直接启动自动推进。' }
-        : { ok: true };
-    case 'resume-auto-run':
-      return !isAutoPausedState()
-        ? { ok: false, message: '当前不在自动暂停状态，无法继续自动推进。' }
-        : { ok: true };
-    case 'regenerate-draft':
-      return uiState.actionState.regenerateDraftDisabled
-        ? { ok: false, message: '当前没有可重生成的 Draft。' }
-        : { ok: true };
-    case 'confirm-summarizer':
-      return !isSummarizerSelectingState() || !uiState.summarizerPaneId
-        ? { ok: false, message: '当前状态下不能确认总结者。' }
-        : { ok: true };
-    case 'reset-console':
-      return uiState.actionState.resetConsoleDisabled
-        ? { ok: false, message: '当前没有可重置的讨论内容。' }
-        : { ok: true };
-    default:
-      return {
-        ok: false,
-        message: `Unsupported discussion action: ${action || 'empty'}.`,
-      };
-  }
-}
-
-async function executeDiscussionControlAction(action) {
-  switch (action) {
-    case 'primary':
-      await handlePrimaryAction();
-      return;
-    case 'generate-round-one':
-      await generateRoundOneDraft();
-      return;
-    case 'submit-current-draft':
-      await submitCurrentDraft({
-        automated: state.runMode === 'auto',
-      });
-      return;
-    case 'prepare-next-manual-round':
-      await prepareNextManualRound();
-      return;
-    case 'start-auto-run':
-      await startAutoRun();
-      return;
-    case 'resume-auto-run':
-      await resumeAutoRun();
-      return;
-    case 'regenerate-draft':
-      await regenerateDraft();
-      return;
-    case 'confirm-summarizer':
-      await confirmSummarizerAndPrepareFinalRound();
-      return;
-    case 'reset-console':
-      resetConsoleToIdle();
-      return;
-    default:
-      throw new Error(`Unsupported discussion action: ${action || 'empty'}.`);
-  }
-}
-
-async function runDiscussionControlAction(action, options = {}) {
-  const normalizedAction = String(action || '').trim();
-  const waitForCompletion = Boolean(options?.waitForCompletion);
-  const uiState = buildDiscussionUiStateModel();
-  const actionLabel = getDiscussionControlActionLabel(normalizedAction, uiState);
-  const validation = validateDiscussionControlAction(normalizedAction, uiState);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      message: validation.message,
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  let actionPromise;
-  try {
-    actionPromise = executeDiscussionControlAction(normalizedAction);
-  } catch (error) {
-    return {
-      ok: false,
-      message: error?.message || `Failed to execute discussion action: ${normalizedAction}.`,
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  if (!waitForCompletion) {
-    Promise.resolve(actionPromise).catch((error) => {
-      console.error(`Discussion control action failed: ${normalizedAction}`, error);
-      setFeedback('外部讨论动作执行失败。', {
-        error: true,
-        meta: error?.message || `${actionLabel} 执行失败。`,
-      });
-      render();
-    });
-
-    return {
-      ok: true,
-      message: `已启动：${actionLabel}。`,
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  try {
-    await actionPromise;
-  } catch (error) {
-    console.error(`Discussion control action failed: ${normalizedAction}`, error);
-    return {
-      ok: false,
-      message: error?.message || `${actionLabel} 执行失败。`,
-      state: buildDiscussionControlSnapshot(),
-    };
-  }
-
-  return {
-    ok: true,
-    message: `已完成：${actionLabel}。`,
-    state: buildDiscussionControlSnapshot(),
-  };
+  return discussionControlBridge.buildDiscussionControlSnapshot();
 }
 
 async function handleDiscussionControlRequest(payload = {}) {
-  const requestType = String(payload?.type || '').trim();
-
-  switch (requestType) {
-    case 'get-state':
-      return {
-        ok: true,
-        message: 'Captured current discussion flow state.',
-        state: buildDiscussionControlSnapshot(),
-      };
-    case 'patch-state':
-      return updateDiscussionControlState(payload?.patch || {});
-    case 'run-action':
-      return runDiscussionControlAction(payload?.action, {
-        waitForCompletion: payload?.waitForCompletion,
-      });
-    default:
-      return {
-        ok: false,
-        message: `Unsupported discussion control request: ${requestType || 'empty'}.`,
-        state: buildDiscussionControlSnapshot(),
-      };
-  }
+  return discussionControlBridge.handleDiscussionControlRequest(payload);
 }
 
 function render() {
+  const uiState = buildDiscussionUiStateModel();
   renderPanelVisibility();
   refs.floatingPanel.classList.toggle('is-idle', state.consoleState === 'idle');
   refs.floatingPanel.classList.toggle('is-draft-ready', isDraftReadyState());
-  renderHeader();
+  renderHeader(uiState);
   renderTaskTypeSelector();
   renderModeSelector();
   renderStickyRuleTags();
@@ -1868,10 +1123,10 @@ function render() {
   renderSupportSummaries();
   renderDraftSourcesPanel();
   updateDraftSources();
-  renderInputs();
+  renderInputs(uiState);
   updateCharacterCount();
   renderFeedback();
-  renderActionButtons();
+  renderActionButtons(uiState);
 }
 
 function focusPrimaryField() {
@@ -2068,11 +1323,15 @@ async function captureCompletedRoundResultsForPaneIds(paneIds = []) {
   }
 
   const captureResult = await ipcRenderer.invoke('capture-provider-round-results', { paneIds });
-  if (!Array.isArray(captureResult?.results)) {
+  return normalizeCapturedRoundResults(captureResult?.results);
+}
+
+function normalizeCapturedRoundResults(results = []) {
+  if (!Array.isArray(results)) {
     return [];
   }
 
-  return captureResult.results
+  return results
     .filter((result) => {
       const hasUsableReply = result?.hasUsableReply !== undefined
         ? Boolean(result.hasUsableReply)
@@ -2199,31 +1458,13 @@ function clearFlowErrorStates() {
 }
 
 function setDispatchingTrackStatuses(paneIds = [], silentPaneIds = []) {
-  const targetPaneIds = new Set(getUniquePaneIds(paneIds));
-  const mutedPaneIds = new Set(getUniquePaneIds(silentPaneIds));
-
   syncProviderTracks();
-  Object.keys(state.providerTracks).forEach((paneId) => {
-    if (targetPaneIds.has(paneId)) {
-      updateProviderTrack(paneId, {
-        status: 'dispatching',
-        error: '',
-      });
-      return;
-    }
-
-    if (mutedPaneIds.has(paneId)) {
-      updateProviderTrack(paneId, {
-        status: 'muted',
-        error: '',
-      });
-      return;
-    }
-
-    updateProviderTrack(paneId, {
-      status: 'ready',
-      error: '',
-    });
+  updateProviderTrackStatuses({
+    allPaneIds: Object.keys(state.providerTracks),
+    targetPaneIds: paneIds,
+    mutedPaneIds: silentPaneIds,
+    targetStatus: 'dispatching',
+    updateTrack: updateProviderTrack,
   });
 }
 
@@ -2710,16 +1951,14 @@ async function pollRoundCompletion(token, paneIds, automated) {
       inspection = await ipcRenderer.invoke('inspect-provider-round-statuses', { paneIds });
     } catch (error) {
       console.error('Failed to inspect provider round statuses:', error);
-      if (automated) {
-        await pauseAutoRun('无法读取当前轮状态。', {
-          meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
-        });
-      } else {
-        enterGlobalErrorState('无法读取当前轮状态。', {
-          meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
-          resumeAction: 'resume-waiting',
-        });
-      }
+      await handleRoundFlowError({
+        automated,
+        message: '无法读取当前轮状态。',
+        meta: error?.message || '请检查当前 Provider 页面是否仍在可交互状态。',
+        resumeAction: 'resume-waiting',
+        automatedHandler: pauseAutoRun,
+        manualHandler: enterGlobalErrorState,
+      });
       return;
     }
 
@@ -2728,16 +1967,14 @@ async function pollRoundCompletion(token, paneIds, automated) {
     }
 
     if (!Array.isArray(inspection?.results) || inspection.results.length === 0) {
-      if (automated) {
-        await pauseAutoRun('当前轮没有可用的 Provider 状态。', {
-          meta: '请检查参与 AI 是否仍然存在。',
-        });
-      } else {
-        enterGlobalErrorState('当前轮没有可用的 Provider 状态。', {
-          meta: '请检查参与 AI 是否仍然存在。',
-          resumeAction: 'resume-waiting',
-        });
-      }
+      await handleRoundFlowError({
+        automated,
+        message: '当前轮没有可用的 Provider 状态。',
+        meta: '请检查参与 AI 是否仍然存在。',
+        resumeAction: 'resume-waiting',
+        automatedHandler: pauseAutoRun,
+        manualHandler: enterGlobalErrorState,
+      });
       return;
     }
 
@@ -2746,16 +1983,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
 
     const failedInspection = inspection.results.find((result) => !result.ok);
     if (failedInspection) {
-      if (automated) {
-        await pauseAutoRun(`${failedInspection.providerName} 状态检查失败。`, {
-          meta: failedInspection.error || '请检查该 AI 页面是否仍可读取。',
-        });
-      } else {
-        enterRoundPartialError(`${failedInspection.providerName} 状态检查失败。`, {
-          meta: failedInspection.error || '你可以继续等待、跳过该 AI，或检查网页后重试。',
-          resumeAction: 'resume-waiting',
-        });
-      }
+      await handleRoundFlowError({
+        automated,
+        message: `${failedInspection.providerName} 状态检查失败。`,
+        meta: failedInspection.error || (automated
+          ? '请检查该 AI 页面是否仍可读取。'
+          : '你可以继续等待、跳过该 AI，或检查网页后重试。'),
+        resumeAction: 'resume-waiting',
+        automatedHandler: pauseAutoRun,
+        manualHandler: enterRoundPartialError,
+      });
       return;
     }
 
@@ -2770,37 +2007,48 @@ async function pollRoundCompletion(token, paneIds, automated) {
 
     const stalledPaneLabels = getBusyStallPaneLabels(stalledResults);
     if (stalledPaneLabels.length > 0) {
-      if (automated) {
-        await pauseAutoRun(`第 ${state.currentRoundNumber} 轮长时间无进展。`, {
-          meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
-        });
-      } else {
-        enterRoundPartialError(`第 ${state.currentRoundNumber} 轮长时间无进展。`, {
-          meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
-          resumeAction: 'resume-waiting',
-        });
-      }
+      await handleRoundFlowError({
+        automated,
+        message: `第 ${state.currentRoundNumber} 轮长时间无进展。`,
+        meta: `${stalledPaneLabels.join(' / ')} 仍显示生成中，但回复长时间没有继续增长。`,
+        resumeAction: 'resume-waiting',
+        automatedHandler: pauseAutoRun,
+        manualHandler: enterRoundPartialError,
+      });
       return;
     }
 
-    const allDone = settledResults.every((result) => result.isEffectivelyCompleted);
-    if (allDone) {
+    const readyForStableCapture = shouldAttemptStableCapture(settledResults);
+    if (readyForStableCapture) {
       let captureResult;
 
       try {
         captureResult = await ipcRenderer.invoke('capture-provider-round-results', { paneIds });
       } catch (error) {
         console.error('Failed to capture provider round results:', error);
-        if (automated) {
-          await pauseAutoRun('本轮稳定结果抓取失败。', {
-            meta: error?.message || '你可以稍后继续自动运行。',
+        if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
+          setFeedback(`正在等待第 ${state.currentRoundNumber} 轮稳定收口`, {
+            meta: '系统已经检测到各 AI 都有回复，但仍在等待最终稳定文本版本。',
           });
-        } else {
-          enterRoundPartialError('本轮稳定结果抓取失败。', {
-            meta: error?.message || '你可以稍后继续等待，或先跳过异常 AI。',
-            resumeAction: 'resume-waiting',
-          });
+          await delay(AUTO_WAIT_POLL_INTERVAL_MS);
+          continue;
         }
+        if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
+          const readyCount = paneIds.length - missingPaneIds.length;
+          setFeedback(`正在等待第 ${state.currentRoundNumber} 轮稳定收口`, {
+            meta: `已抓到 ${readyCount} / ${paneIds.length} 条稳定回复，系统会继续收束剩余结果。`,
+          });
+          await delay(AUTO_WAIT_POLL_INTERVAL_MS);
+          continue;
+        }
+        await handleRoundFlowError({
+          automated,
+          message: '本轮稳定结果抓取失败。',
+          meta: error?.message || (automated ? '你可以稍后继续自动运行。' : '你可以稍后继续等待，或先跳过异常 AI。'),
+          resumeAction: 'resume-waiting',
+          automatedHandler: pauseAutoRun,
+          manualHandler: enterRoundPartialError,
+        });
         return;
       }
 
@@ -2808,40 +2056,48 @@ async function pollRoundCompletion(token, paneIds, automated) {
         return;
       }
 
-      const missingPaneIds = getMissingCapturedPaneIds(paneIds, captureResult?.results || []);
+      const completedResults = normalizeCapturedRoundResults(captureResult?.results);
+      const missingPaneIds = getMissingCapturedPaneIds(paneIds, completedResults);
+      const fullyCaptured = completedResults.length === paneIds.length && missingPaneIds.length === 0;
 
-      if (!Array.isArray(captureResult?.results) || captureResult.results.length === 0 || !captureResult?.ok || missingPaneIds.length > 0) {
+      if (!fullyCaptured) {
         const failedCapture = captureResult?.results?.find((result) => !result.ok);
+        if (completedResults.length > 0) {
+          applyProviderInspectionResults(completedResults);
+          render();
+        }
+        if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
+          const readyCount = paneIds.length - missingPaneIds.length;
+          setFeedback(`正在等待第 ${state.currentRoundNumber} 轮稳定收口`, {
+            meta: `已抓到 ${readyCount} / ${paneIds.length} 条稳定回复，系统会继续收束剩余结果。`,
+          });
+          await delay(AUTO_WAIT_POLL_INTERVAL_MS);
+          continue;
+        }
         const failureMessage = failedCapture ? `${failedCapture.providerName} 最终结果抓取失败。` : '本轮稳定结果抓取失败。';
         const failureMeta = failedCapture?.error || (missingPaneIds.length > 0
           ? '仍有 AI 未抓取到完整稳定结果，系统已暂停，避免把半截内容推进到下一轮。'
           : '你可以稍后继续自动运行。');
-        if (automated) {
-          await pauseAutoRun(failureMessage, {
-            meta: failureMeta,
-          });
-        } else {
-          enterRoundPartialError(failureMessage, {
-            meta: failureMeta,
-            resumeAction: 'resume-waiting',
-          });
-        }
+        await handleRoundFlowError({
+          automated,
+          message: failureMessage,
+          meta: failureMeta,
+          resumeAction: 'resume-waiting',
+          automatedHandler: pauseAutoRun,
+          manualHandler: enterRoundPartialError,
+        });
         return;
       }
 
-      const completedResults = captureResult.results.map((result) => ({
-        ...result,
-        status: 'completed',
-      }));
       applyProviderInspectionResults(completedResults);
-      recordCompletedRound(captureResult.results);
+      recordCompletedRound(completedResults);
       clearFlowErrorStates();
 
       const mode = getModeOption();
       if (state.currentRoundNumber >= mode.totalRounds) {
         await finishDiscussion({
           automated,
-          finalResult: captureResult.results[0] || null,
+          finalResult: completedResults[0] || null,
         });
         return;
       }
@@ -2860,16 +2116,16 @@ async function pollRoundCompletion(token, paneIds, automated) {
     }
 
     if (Date.now() - state.roundStartedAt >= AUTO_WAIT_TIMEOUT_MS) {
-      if (automated) {
-        await pauseAutoRun(`第 ${state.currentRoundNumber} 轮等待超时。`, {
-          meta: '你可以继续自动运行、手动检查网页，或改为手动接管。',
-        });
-      } else {
-        enterRoundPartialError(`第 ${state.currentRoundNumber} 轮等待超时。`, {
-          meta: '你可以继续等待、检查网页，或跳过异常 AI 后继续推进。',
-          resumeAction: 'resume-waiting',
-        });
-      }
+      await handleRoundFlowError({
+        automated,
+        message: `第 ${state.currentRoundNumber} 轮等待超时。`,
+        meta: automated
+          ? '你可以继续自动运行、手动检查网页，或改为手动接管。'
+          : '你可以继续等待、检查网页，或跳过异常 AI 后继续推进。',
+        resumeAction: 'resume-waiting',
+        automatedHandler: pauseAutoRun,
+        manualHandler: enterRoundPartialError,
+      });
       return;
     }
 
@@ -2890,28 +2146,13 @@ async function startWaitingForCurrentRound(options = {}) {
   state.expectedPaneIds = [...paneIds];
   state.roundStartedAt = Date.now();
   state.consoleState = 'round-waiting';
-  Object.keys(state.providerTracks).forEach((paneId) => {
-    if (paneIds.includes(paneId)) {
-      updateProviderTrack(paneId, {
-        status: 'waiting',
-        latestReplyText: '',
-        error: '',
-      });
-      return;
-    }
-
-    if (silentPaneIds.includes(paneId)) {
-      updateProviderTrack(paneId, {
-        status: 'muted',
-        error: '',
-      });
-      return;
-    }
-
-    updateProviderTrack(paneId, {
-      status: 'ready',
-      error: '',
-    });
+  updateProviderTrackStatuses({
+    allPaneIds: Object.keys(state.providerTracks),
+    targetPaneIds: paneIds,
+    mutedPaneIds: silentPaneIds,
+    targetStatus: 'waiting',
+    resetTargetReplies: true,
+    updateTrack: updateProviderTrack,
   });
   render();
 
@@ -3052,48 +2293,53 @@ async function submitCurrentDraft(options = {}) {
   const silentPaneIds = getSilentPaneIds(paneIds);
 
   if (paneIds.length === 0) {
-    if (automated) {
-      await pauseAutoRun('当前没有可发送的目标 AI。', {
-        meta: '请先确认参与 AI 是否仍然存在，再重新生成本轮 Draft。',
-        resumeAction: 'submit-current-draft',
-      });
-    } else {
-      enterGlobalErrorState('当前没有可发送的目标 AI。', {
-        meta: '请先确认参与 AI 是否仍然存在，再重新生成本轮 Draft。',
-        resumeAction: 'submit-current-draft',
-      });
-    }
+    await handleRoundFlowError({
+      automated,
+      message: '当前没有可发送的目标 AI。',
+      meta: '请先确认参与 AI 是否仍然存在，再重新生成本轮 Draft。',
+      resumeAction: 'submit-current-draft',
+      automatedHandler: pauseAutoRun,
+      manualHandler: enterGlobalErrorState,
+    });
     return;
   }
 
   if (getPaneEntries().length === 0) {
-    if (automated) {
-      await pauseAutoRun('当前没有可发送的 AI 面板。', {
-        meta: '请先在设置里配置至少一个参与面板，再发送本轮 Draft。',
-        resumeAction: 'submit-current-draft',
-      });
-    } else {
-      setFeedback('当前没有可发送的 AI 面板。', {
-        error: true,
-        meta: '请先在设置里配置至少一个参与面板，再发送首轮 Draft。',
-      });
-    }
+    await handleRoundFlowError({
+      automated,
+      message: '当前没有可发送的 AI 面板。',
+      meta: automated
+        ? '请先在设置里配置至少一个参与面板，再发送本轮 Draft。'
+        : '请先在设置里配置至少一个参与面板，再发送首轮 Draft。',
+      resumeAction: 'submit-current-draft',
+      automatedHandler: pauseAutoRun,
+      manualHandler: (message, errorOptions) => {
+        setFeedback(message, {
+          error: true,
+          meta: errorOptions.meta,
+        });
+      },
+    });
     return;
   }
 
   if (!state.draft.trim()) {
-    if (automated) {
-      await pauseAutoRun('当前 Draft 为空，无法发送。', {
-        meta: '请先生成或补全当前轮 Draft。',
-        resumeAction: 'submit-current-draft',
-      });
-    } else {
-      setFeedback('当前 Draft 为空，无法发送。', {
-        error: true,
-        meta: '请先生成或补全首轮 Draft。',
-      });
-      focusPrimaryField();
-    }
+    await handleRoundFlowError({
+      automated,
+      message: '当前 Draft 为空，无法发送。',
+      meta: automated
+        ? '请先生成或补全当前轮 Draft。'
+        : '请先生成或补全首轮 Draft。',
+      resumeAction: 'submit-current-draft',
+      automatedHandler: pauseAutoRun,
+      manualHandler: (message, errorOptions) => {
+        setFeedback(message, {
+          error: true,
+          meta: errorOptions.meta,
+        });
+        focusPrimaryField();
+      },
+    });
     return;
   }
 
@@ -3127,38 +2373,35 @@ async function submitCurrentDraft(options = {}) {
         throw new Error(prepareResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
       }
     } else {
-      await mirrorDraftToTargetPanesNow();
+      const mirrorResult = await mirrorDraftToTargetPanesNow();
+      if (!mirrorResult?.ok) {
+        throw new Error(mirrorResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
+      }
     }
 
     submitResult = await ipcRenderer.invoke('submit-message-to-panes', { paneIds });
   } catch (error) {
     console.error('Failed to submit current draft:', error);
-    if (automated) {
-      await pauseAutoRun(`第 ${state.currentRoundNumber} 轮发送失败。`, {
-        meta: error?.message || '提交消息到目标 AI 面板时发生错误。',
-        resumeAction: 'submit-current-draft',
-      });
-    } else {
-      enterGlobalErrorState(`第 ${state.currentRoundNumber} 轮发送失败。`, {
-        meta: error?.message || '提交消息到目标 AI 面板时发生错误。',
-        resumeAction: 'submit-current-draft',
-      });
-    }
+    await handleRoundFlowError({
+      automated,
+      message: `第 ${state.currentRoundNumber} 轮发送失败。`,
+      meta: error?.message || '提交消息到目标 AI 面板时发生错误。',
+      resumeAction: 'submit-current-draft',
+      automatedHandler: pauseAutoRun,
+      manualHandler: enterGlobalErrorState,
+    });
     return;
   }
 
   if (!submitResult?.ok) {
-    if (automated) {
-      await pauseAutoRun(submitResult?.message || `第 ${state.currentRoundNumber} 轮发送失败。`, {
-        meta: '请检查各 AI 输入框是否仍可交互。',
-        resumeAction: 'submit-current-draft',
-      });
-    } else {
-      enterGlobalErrorState(submitResult?.message || `第 ${state.currentRoundNumber} 轮发送失败。`, {
-        meta: '请检查各 AI 输入框是否仍可交互。',
-        resumeAction: 'submit-current-draft',
-      });
-    }
+    await handleRoundFlowError({
+      automated,
+      message: submitResult?.message || `第 ${state.currentRoundNumber} 轮发送失败。`,
+      meta: '请检查各 AI 输入框是否仍可交互。',
+      resumeAction: 'submit-current-draft',
+      automatedHandler: pauseAutoRun,
+      manualHandler: enterGlobalErrorState,
+    });
     return;
   }
 
@@ -3175,45 +2418,19 @@ async function submitCurrentDraft(options = {}) {
 }
 
 async function handlePrimaryAction() {
-  if (isAutoPausedState()) {
-    await resumeAutoRun();
-    return;
-  }
+  const handlers = [
+    [isAutoPausedState, () => resumeAutoRun()],
+    [isFinishedState, () => resetConsoleToIdle()],
+    [isGlobalErrorState, () => retryGlobalErrorStep()],
+    [isPartialErrorState, () => continueCurrentRoundAfterError()],
+    [isSummarizerSelectingState, () => confirmSummarizerAndPrepareFinalRound()],
+    [isDraftReadyState, () => submitCurrentDraft({ automated: state.runMode === 'auto' })],
+    [isReviewState, () => (state.runMode === 'auto' ? maybeAdvanceAutoRunAfterRound() : prepareNextManualRound())],
+  ];
 
-  if (isFinishedState()) {
-    resetConsoleToIdle();
-    return;
-  }
-
-  if (isGlobalErrorState()) {
-    await retryGlobalErrorStep();
-    return;
-  }
-
-  if (isPartialErrorState()) {
-    await continueCurrentRoundAfterError();
-    return;
-  }
-
-  if (isSummarizerSelectingState()) {
-    await confirmSummarizerAndPrepareFinalRound();
-    return;
-  }
-
-  if (isDraftReadyState()) {
-    await submitCurrentDraft({
-      automated: state.runMode === 'auto',
-    });
-    return;
-  }
-
-  if (isReviewState()) {
-    if (state.runMode === 'auto') {
-      await maybeAdvanceAutoRunAfterRound();
-      return;
-    }
-
-    await prepareNextManualRound();
+  const matchedHandler = handlers.find(([predicate]) => predicate());
+  if (matchedHandler) {
+    await matchedHandler[1]();
     return;
   }
 

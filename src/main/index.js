@@ -19,6 +19,7 @@ let currentZoomFactor = 1.0;
 let codexBridge;
 let appSettings;
 const pendingPrivateNewChatRequests = new Map();
+const pendingPaneActionRequests = new Map();
 const pendingDiscussionControlRequests = new Map();
 const SHARED_PARTITION = 'persist:shared';
 const CHATGPT_PARTITION = getProviderCompatibility('chatgpt').partition;
@@ -547,14 +548,23 @@ async function sendTextUpdateToPaneIds(paneIds, text) {
     return {
       ok: false,
       message: 'No target panes were found.',
+      requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+      resolvedPaneIds: [],
+      results: [],
     };
   }
 
-  sendChannelToPaneEntries(paneEntries, 'text-update', text || '');
-  return {
-    ok: true,
-    message: `Mirrored text to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
-  };
+  return requestPaneActionForPaneEntries(
+    paneEntries,
+    'text-update',
+    () => ({
+      text: String(text || ''),
+    }),
+    {
+      action: 'text-update',
+      timeoutError: 'Timed out while waiting for text injection.',
+    }
+  );
 }
 
 async function submitMessageToPaneIds(paneIds) {
@@ -563,24 +573,21 @@ async function submitMessageToPaneIds(paneIds) {
     return {
       ok: false,
       message: 'No target panes were found.',
+      requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+      resolvedPaneIds: [],
+      results: [],
     };
   }
 
-  sendChannelToPaneEntries(paneEntries, 'submit-message');
-  return {
-    ok: true,
-    message: `Submitted messages to ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
-  };
-}
-
-function sendChannelToPaneEntries(paneEntries, channel, payload) {
-  paneEntries.forEach((paneEntry) => {
-    if (!paneEntry?.view?.webContents) {
-      return;
+  return requestPaneActionForPaneEntries(
+    paneEntries,
+    'submit-message',
+    () => ({}),
+    {
+      action: 'submit-message',
+      timeoutError: 'Timed out while waiting for submit acknowledgement.',
     }
-
-    paneEntry.view.webContents.send(channel, payload);
-  });
+  );
 }
 
 function buildInspectionPayload(paneEntry, inspectionResult) {
@@ -669,6 +676,138 @@ function buildInspectionSummary(results = []) {
     withReply: 0,
     withUsableReply: 0,
     weakReply: 0,
+  });
+}
+
+function getPaneActionMeta(action) {
+  const actionMeta = {
+    'text-update': {
+      successPrefix: 'Mirrored text to',
+      failureFallback: 'Text injection failed.',
+      timeoutError: 'Timed out while waiting for text injection.',
+    },
+    'inject-sync-text': {
+      successPrefix: 'Injected prompts into',
+      failureFallback: 'Prompt injection failed.',
+      timeoutError: 'Timed out while waiting for prompt injection.',
+    },
+    'submit-message': {
+      successPrefix: 'Submitted messages to',
+      failureFallback: 'Message submission failed.',
+      timeoutError: 'Timed out while waiting for submit acknowledgement.',
+    },
+  };
+
+  return actionMeta[action] || {
+    successPrefix: 'Completed pane action for',
+    failureFallback: 'Pane action failed.',
+    timeoutError: 'Timed out while waiting for pane acknowledgement.',
+  };
+}
+
+function buildPaneActionResponse(paneEntries, receivedResults, options = {}) {
+  const action = options.action || null;
+  const actionMeta = getPaneActionMeta(action);
+  const expectedResults = paneEntries.map((paneEntry) => {
+    const result = receivedResults.find((entry) => entry.paneId === paneEntry.id);
+    if (result) {
+      return result;
+    }
+
+    return {
+      paneId: paneEntry.id,
+      provider: paneEntry?.view?.providerKey || paneEntry?.providerKey || null,
+      action,
+      ok: false,
+      stage: 'timed-out',
+      error: options.timeoutError || actionMeta.timeoutError,
+      message: null,
+      details: null,
+    };
+  });
+
+  const successes = expectedResults.filter((result) => result.ok);
+  const failures = expectedResults.filter((result) => !result.ok);
+  const successLabels = successes.map((result) => {
+    const paneEntry = paneEntries.find((entry) => entry.id === result.paneId);
+    return getPaneLabel(paneEntry);
+  });
+  const failureMessages = failures.map((result) => {
+    const paneEntry = paneEntries.find((entry) => entry.id === result.paneId);
+    return `${getPaneLabel(paneEntry)}: ${result.error || result.message || actionMeta.failureFallback}`;
+  });
+
+  if (failures.length === 0) {
+    return {
+      ok: true,
+      message: `${actionMeta.successPrefix} ${successLabels.join(', ')}.`,
+      requestedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+      resolvedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+      results: expectedResults,
+    };
+  }
+
+  return {
+    ok: false,
+    message: [
+      successLabels.length > 0 ? `${actionMeta.successPrefix} ${successLabels.join(', ')}.` : 'No pane completed the action successfully.',
+      `Failed: ${failureMessages.join('; ')}`,
+    ].join(' '),
+    requestedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+    resolvedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+    results: expectedResults,
+  };
+}
+
+async function requestPaneActionForPaneEntries(paneEntries, channel, payloadBuilder, options = {}) {
+  const targetPaneEntries = Array.isArray(paneEntries)
+    ? paneEntries.filter((paneEntry) => paneEntry?.view?.webContents)
+    : [];
+
+  if (targetPaneEntries.length === 0) {
+    return {
+      ok: false,
+      message: 'No target panes were found.',
+      requestedPaneIds: [],
+      resolvedPaneIds: [],
+      results: [],
+    };
+  }
+
+  const action = options.action || channel;
+  const requestId = `pane-action-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return new Promise((resolve) => {
+    const timeoutHandle = setTimeout(() => {
+      const pending = pendingPaneActionRequests.get(requestId);
+      if (!pending) {
+        return;
+      }
+
+      pendingPaneActionRequests.delete(requestId);
+      resolve(buildPaneActionResponse(pending.paneEntries, pending.results, pending.options));
+    }, Number.isFinite(options.timeoutMs) ? options.timeoutMs : 8000);
+
+    pendingPaneActionRequests.set(requestId, {
+      paneEntries: targetPaneEntries,
+      results: [],
+      resolve,
+      timeoutHandle,
+      options: {
+        action,
+        timeoutError: options.timeoutError,
+      },
+    });
+
+    targetPaneEntries.forEach((paneEntry) => {
+      const payload = typeof payloadBuilder === 'function' ? payloadBuilder(paneEntry) : {};
+      paneEntry.view.webContents.send(channel, {
+        requestId,
+        paneId: paneEntry.id,
+        action,
+        ...(payload && typeof payload === 'object' ? payload : {}),
+      });
+    });
   });
 }
 
@@ -860,21 +999,21 @@ app.on('ready', async () => {
   ipcMain.handle('send-text-update', async (event, text) => {
     const supersizedPosition = mainWindow.getSupersizedPosition ? mainWindow.getSupersizedPosition() : null;
     const paneEntries = getPaneEntries();
+    const targetPaneEntries = supersizedPosition
+      ? paneEntries.filter((paneEntry) => paneEntry.id === supersizedPosition)
+      : paneEntries;
 
-    // If supersized, only send to that position
-    if (supersizedPosition) {
-      const supersizedPane = paneEntries.find((paneEntry) => paneEntry.id === supersizedPosition);
-      if (supersizedPane?.view?.webContents) {
-        supersizedPane.view.webContents.send('text-update', text);
+    return requestPaneActionForPaneEntries(
+      targetPaneEntries,
+      'text-update',
+      () => ({
+        text: String(text || ''),
+      }),
+      {
+        action: 'text-update',
+        timeoutError: 'Timed out while waiting for text injection.',
       }
-    } else {
-      // Send text to all positions
-      paneEntries.forEach((paneEntry) => {
-        if (paneEntry.view && paneEntry.view.webContents) {
-          paneEntry.view.webContents.send('text-update', text);
-        }
-      });
-    }
+    );
   });
 
   ipcMain.handle('send-text-update-to-panes', async (event, payload = {}) => {
@@ -1078,19 +1217,34 @@ app.on('ready', async () => {
 
     const leftProviderName = getViewProviderDisplayName(leftView);
     const rightProviderName = getViewProviderDisplayName(rightView);
+    const promptByPaneId = new Map([
+      [leftPane.id, buildDiscussionPrompt(rightProviderName, rightResult.latestReplyText)],
+      [rightPane.id, buildDiscussionPrompt(leftProviderName, leftResult.latestReplyText)],
+    ]);
+    const deliveryResult = await requestPaneActionForPaneEntries(
+      [leftPane, rightPane],
+      'inject-sync-text',
+      (paneEntry) => ({
+        text: promptByPaneId.get(paneEntry.id) || '',
+      }),
+      {
+        action: 'inject-sync-text',
+        timeoutError: 'Timed out while waiting for sync injection.',
+      }
+    );
 
-    leftView.webContents.send(
-      'inject-sync-text',
-      buildDiscussionPrompt(rightProviderName, rightResult.latestReplyText)
-    );
-    rightView.webContents.send(
-      'inject-sync-text',
-      buildDiscussionPrompt(leftProviderName, leftResult.latestReplyText)
-    );
+    if (!deliveryResult?.ok) {
+      return {
+        ok: false,
+        message: deliveryResult?.message || 'Sync failed while injecting the mirrored prompts.',
+        results: deliveryResult?.results || [],
+      };
+    }
 
     return {
       ok: true,
       message: `Synced the latest ${leftProviderName} and ${rightProviderName} replies into the opposite input boxes.`,
+      results: deliveryResult.results,
     };
   });
 
@@ -1161,13 +1315,38 @@ app.on('ready', async () => {
       };
     }
 
-    prompts.forEach((entry) => {
-      entry.paneEntry.view.webContents.send('inject-sync-text', entry.prompt);
-    });
+    const promptByPaneId = new Map(
+      prompts.map((entry) => [entry.paneId, entry.prompt])
+    );
+    const deliveryResult = await requestPaneActionForPaneEntries(
+      prompts.map((entry) => entry.paneEntry),
+      'inject-sync-text',
+      (paneEntry) => ({
+        text: promptByPaneId.get(paneEntry.id) || '',
+      }),
+      {
+        action: 'inject-sync-text',
+        timeoutError: 'Timed out while waiting for prompt injection.',
+      }
+    );
+
+    if (!deliveryResult?.ok) {
+      return {
+        ok: false,
+        message: deliveryResult?.message || `Failed to prepare ${promptType}.`,
+        prompts: prompts.map((entry) => ({
+          paneId: entry.paneId,
+          providerName: entry.providerName,
+          prompt: entry.prompt,
+        })),
+        results: deliveryResult?.results || [],
+      };
+    }
 
     return {
       ok: true,
       message: `Prepared ${promptType} for ${prompts.length} pane${prompts.length > 1 ? 's' : ''}.`,
+      results: deliveryResult.results,
       prompts: prompts.map((entry) => ({
         paneId: entry.paneId,
         providerName: entry.providerName,
@@ -1228,22 +1407,19 @@ app.on('ready', async () => {
   ipcMain.handle('submit-message', async (event) => {
     const supersizedPosition = mainWindow.getSupersizedPosition ? mainWindow.getSupersizedPosition() : null;
     const paneEntries = getPaneEntries();
+    const targetPaneEntries = supersizedPosition
+      ? paneEntries.filter((paneEntry) => paneEntry.id === supersizedPosition)
+      : paneEntries;
 
-    // If supersized, only submit to that position
-    if (supersizedPosition) {
-      const supersizedPane = paneEntries.find((paneEntry) => paneEntry.id === supersizedPosition);
-      if (supersizedPane?.view?.webContents) {
-        supersizedPane.view.webContents.send('submit-message');
+    return requestPaneActionForPaneEntries(
+      targetPaneEntries,
+      'submit-message',
+      () => ({}),
+      {
+        action: 'submit-message',
+        timeoutError: 'Timed out while waiting for submit acknowledgement.',
       }
-    } else {
-      // Submit to all positions
-      paneEntries.forEach((paneEntry) => {
-        if (paneEntry.view && paneEntry.view.webContents) {
-          paneEntry.view.webContents.send('submit-message');
-        }
-      });
-    }
-    return true;
+    );
   });
 
   ipcMain.handle('submit-message-to-panes', async (event, payload = {}) => {
@@ -1293,6 +1469,46 @@ app.on('ready', async () => {
       clearTimeout(pending.timeoutHandle);
       pendingPrivateNewChatRequests.delete(requestId);
       pending.resolve(buildPrivateNewChatResponse(pending.paneEntries, pending.results));
+    }
+
+    return true;
+  });
+
+  ipcMain.handle('pane-action-result', async (event, payload = {}) => {
+    const requestId = String(payload?.requestId || '').trim();
+    if (!requestId) {
+      return false;
+    }
+
+    const pending = pendingPaneActionRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    const normalizedPayload = {
+      paneId: payload?.paneId || null,
+      provider: payload?.provider || null,
+      action: payload?.action || pending.options?.action || null,
+      ok: Boolean(payload?.ok),
+      stage: payload?.stage || (payload?.ok ? 'completed' : 'failed'),
+      error: payload?.error || null,
+      message: payload?.message || null,
+      details: payload?.details && typeof payload.details === 'object'
+        ? payload.details
+        : null,
+    };
+
+    const existingIndex = pending.results.findIndex((entry) => entry.paneId === normalizedPayload.paneId);
+    if (existingIndex >= 0) {
+      pending.results[existingIndex] = normalizedPayload;
+    } else {
+      pending.results.push(normalizedPayload);
+    }
+
+    if (pending.results.length >= pending.paneEntries.length) {
+      clearTimeout(pending.timeoutHandle);
+      pendingPaneActionRequests.delete(requestId);
+      pending.resolve(buildPaneActionResponse(pending.paneEntries, pending.results, pending.options));
     }
 
     return true;

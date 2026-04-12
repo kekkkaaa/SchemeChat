@@ -47,6 +47,23 @@ function buildWeakReplyError(result) {
   }
 }
 
+function buildPendingCaptureError(result) {
+  if (!result) {
+    return 'Latest reply is not stable enough to trust yet.';
+  }
+
+  const text = String(result.text || '').trim();
+  if (!text) {
+    return result.error || 'No latest reply was found yet.';
+  }
+
+  if (!hasUsableReply(result)) {
+    return result.error || buildWeakReplyError(result);
+  }
+
+  return result.error || 'Timed out while waiting for the latest reply to stabilize.';
+}
+
 async function waitUntilNotBusy(inspectFn, options = {}) {
   const timeoutMs = options.timeoutMs || 30000;
   const pollIntervalMs = options.pollIntervalMs || 700;
@@ -82,90 +99,57 @@ async function captureUntilStable(inspectFn, options = {}, initialResult = null)
   const stablePassesRequired = options.stablePassesRequired || 2;
   const startedAt = Date.now();
 
-  let previousResult = initialResult || await inspectFn();
-  if (!previousResult.ok) {
-    return previousResult;
-  }
-
-  if (previousResult.busy) {
-    return {
-      ...previousResult,
-      ok: false,
-      error: previousResult.error || 'The provider is still generating.',
-    };
-  }
-
-  if (!previousResult.text) {
-    return {
-      ...previousResult,
-      ok: false,
-      error: previousResult.error || 'No latest reply was found.',
-    };
-  }
-
-  if (!hasUsableReply(previousResult)) {
-    return {
-      ...previousResult,
-      ok: false,
-      error: previousResult.error || buildWeakReplyError(previousResult),
-    };
-  }
-
-  let previousFingerprint = previousResult.fingerprint || fingerprintText(previousResult.text);
+  let currentResult = initialResult || await inspectFn();
+  let lastObservedResult = currentResult;
+  let lastUsableResult = null;
+  let lastUsableFingerprint = null;
   let stablePasses = 0;
 
   while (Date.now() - startedAt < timeoutMs) {
-    await delay(pollIntervalMs);
-
-    const currentResult = await inspectFn();
     if (!currentResult.ok) {
       return currentResult;
     }
 
-    if (currentResult.busy) {
-      previousResult = currentResult;
-      previousFingerprint = currentResult.fingerprint || fingerprintText(currentResult.text);
-      stablePasses = 0;
-      continue;
-    }
+    lastObservedResult = currentResult;
 
-    if (!currentResult.text) {
-      return {
-        ...currentResult,
-        ok: false,
-        error: currentResult.error || 'No latest reply was found.',
-      };
-    }
+    if (!currentResult.busy) {
+      const currentText = String(currentResult.text || '').trim();
+      if (currentText && hasUsableReply(currentResult)) {
+        const currentFingerprint = currentResult.fingerprint || fingerprintText(currentText);
+        if (currentFingerprint === lastUsableFingerprint) {
+          stablePasses += 1;
+        } else {
+          lastUsableResult = currentResult;
+          lastUsableFingerprint = currentFingerprint;
+          stablePasses = 1;
+        }
 
-    if (!hasUsableReply(currentResult)) {
-      return {
-        ...currentResult,
-        ok: false,
-        error: currentResult.error || buildWeakReplyError(currentResult),
-      };
-    }
-
-    const currentFingerprint = currentResult.fingerprint || fingerprintText(currentResult.text);
-    if (currentFingerprint === previousFingerprint) {
-      stablePasses += 1;
-      if (stablePasses >= stablePassesRequired) {
-        return {
-          ...currentResult,
-          fingerprint: currentFingerprint,
-        };
+        if (stablePasses >= stablePassesRequired) {
+          return {
+            ...currentResult,
+            fingerprint: currentFingerprint,
+          };
+        }
+      } else {
+        lastUsableResult = null;
+        lastUsableFingerprint = null;
+        stablePasses = 0;
       }
     } else {
+      lastUsableResult = null;
+      lastUsableFingerprint = null;
       stablePasses = 0;
     }
 
-    previousResult = currentResult;
-    previousFingerprint = currentFingerprint;
+    await delay(pollIntervalMs);
+    currentResult = await inspectFn();
   }
 
+  const fallbackResult = lastObservedResult || lastUsableResult || currentResult;
   return {
-    ...previousResult,
+    ...fallbackResult,
     ok: false,
-    error: previousResult.error || 'Timed out while waiting for the latest reply to stabilize.',
+    error: buildPendingCaptureError(fallbackResult),
   };
 }
 

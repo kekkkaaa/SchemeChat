@@ -6,7 +6,8 @@
       "mcp__schemechat-local__inspect_round_status",
       "mcp__schemechat-local__inject_text_to_panes",
       "mcp__schemechat-local__submit_message_to_panes",
-      "mcp__schemechat-local__capture_latest_replies"
+      "mcp__schemechat-local__capture_latest_replies",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\lenovo\\\\Pictures\\\\Saved Pictures\\\\共享\\\\sc\\\\SchemeChat\\\\src\\\\renderer\\\\\" | Select-Object Name, Length)"
     ]
   }
 }

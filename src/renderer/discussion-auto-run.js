@@ -106,6 +106,18 @@ function settleInspectionResults(results = [], busyStableTracker = new Map(), no
   };
 }
 
+function shouldAttemptStableCapture(settledResults = []) {
+  if (!Array.isArray(settledResults) || settledResults.length === 0) {
+    return false;
+  }
+
+  return settledResults.every((result) => {
+    const latestReplyText = String(result?.latestReplyText || '');
+    const hasAnyReply = Boolean(result?.hasReply) && Boolean(latestReplyText);
+    return Boolean(result?.isEffectivelyCompleted) || (!result?.busy && hasAnyReply);
+  });
+}
+
 function getMissingCapturedPaneIds(paneIds = [], capturedResults = []) {
   return paneIds.filter((paneId) => {
     return !capturedResults.some((result) => {
@@ -128,4 +140,5 @@ module.exports = {
   getSkippablePaneIdsFromTracks,
   mergeRoundResults,
   settleInspectionResults,
+  shouldAttemptStableCapture,
 };

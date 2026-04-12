@@ -495,15 +495,25 @@ function resetAppendState() {
 function injectText(text) {
   if (!resolveInputElement()) {
     ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
-    return;
+    return {
+      ok: false,
+      stage: 'input-missing',
+      error: 'Input element not found.',
+    };
   }
 
-  writeInputText(String(text || ''));
+  const wrote = writeInputText(String(text || ''));
+  return wrote
+    ? { ok: true, stage: 'text-injected' }
+    : { ok: false, stage: 'text-inject-failed', error: 'Input element not found.' };
 }
 
 function injectSyncText(text) {
   resetAppendState();
-  writeInputText(String(text || ''));
+  const wrote = writeInputText(String(text || ''));
+  return wrote
+    ? { ok: true, stage: 'sync-text-injected' }
+    : { ok: false, stage: 'sync-text-inject-failed', error: 'Input element not found.' };
 }
 
 function dispatchGeminiEnterSubmit(element) {
@@ -658,7 +668,11 @@ function submitMessage() {
   const resolvedInput = resolveInputElement();
   if (!resolvedInput) {
     ipcRenderer.invoke('selector-error', 'gemini', 'Input element not found');
-    return;
+    return {
+      ok: false,
+      stage: 'input-missing',
+      error: 'Input element not found.',
+    };
   }
 
   lastSubmittedText = readGeminiEditorText(resolvedInput);
@@ -668,10 +682,27 @@ function submitMessage() {
     : false;
 
   if (!clicked) {
-    dispatchGeminiEnterSubmit(resolvedInput);
+    const submittedByEnter = dispatchGeminiEnterSubmit(resolvedInput);
+    if (!submittedByEnter) {
+      return {
+        ok: false,
+        stage: 'submit-unavailable',
+        error: 'Gemini submit action was unavailable.',
+      };
+    }
+
+    clearSubmittedTextIfStillPresent(lastSubmittedText);
+    return {
+      ok: true,
+      stage: 'enter-submitted',
+    };
   }
 
   clearSubmittedTextIfStillPresent(lastSubmittedText);
+  return {
+    ok: true,
+    stage: 'submit-clicked',
+  };
 }
 
 setupIPCListeners(provider, config, injectText, submitMessage, {

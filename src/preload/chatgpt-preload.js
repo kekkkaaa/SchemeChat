@@ -105,27 +105,43 @@ function injectText(text) {
 
   if (!resolvedInput) {
     ipcRenderer.invoke('selector-error', 'chatgpt', 'Input element not found');
-    return;
+    return {
+      ok: false,
+      stage: 'input-missing',
+      error: 'Input element not found.',
+    };
   }
 
   if (nextText.length === 0) {
     if (appendBaseText !== null) {
-      writeInputText(appendBaseText);
+      const restored = writeInputText(appendBaseText);
       resetAppendState();
+      return restored
+        ? { ok: true, stage: 'text-restored' }
+        : { ok: false, stage: 'text-restore-failed', error: 'Input element not found.' };
     }
-    return;
+    return {
+      ok: true,
+      stage: 'text-cleared',
+    };
   }
 
   if (appendBaseText === null) {
     appendBaseText = readInputTextValue(resolvedInput);
   }
 
-  writeInputText(`${appendBaseText}${nextText}`);
+  const wrote = writeInputText(`${appendBaseText}${nextText}`);
+  return wrote
+    ? { ok: true, stage: 'text-injected' }
+    : { ok: false, stage: 'text-inject-failed', error: 'Input element not found.' };
 }
 
 function injectSyncText(text) {
   resetAppendState();
-  writeInputText(String(text || ''));
+  const wrote = writeInputText(String(text || ''));
+  return wrote
+    ? { ok: true, stage: 'sync-text-injected' }
+    : { ok: false, stage: 'sync-text-inject-failed', error: 'Input element not found.' };
 }
 
 function isChatgptHost() {

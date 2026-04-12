@@ -320,6 +320,7 @@ function createSchemeChatMcpServer(options = {}) {
         const server = buildServer();
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
+          enableJsonResponse: true,
           onsessioninitialized: (initializedSessionId) => {
             sessions.set(initializedSessionId, { server, transport });
           },

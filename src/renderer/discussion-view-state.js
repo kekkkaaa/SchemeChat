@@ -1,3 +1,33 @@
+const DRAFT_STATE_LABELS = {
+  'draft-preparing': '生成中',
+  'round-dispatching': '发送中',
+  'round-waiting': '等待中',
+  'round-review': '已完成',
+  'summarizer-selecting': '待确认',
+  'round-partial-error': '局部异常',
+  'auto-paused': '自动暂停',
+  'global-error': '流程异常',
+  finished: '最终方案',
+};
+
+const SEND_BUTTON_LABELS = {
+  首轮分析: '发送首轮',
+  交叉讨论: '发送交叉讨论',
+  交叉质疑: '发送交叉质疑',
+  修正方案: '发送修正方案',
+  分歧压缩: '发送压缩轮',
+  确认总结者: '发送确认轮',
+  最终总结: '发送最终总结',
+};
+
+const ROUND_REVIEW_PRIMARY_LABELS = {
+  交叉讨论: '开始交叉讨论',
+  交叉质疑: '开始交叉质疑',
+  修正方案: '进入修正轮',
+  分歧压缩: '进入压缩轮',
+  确认总结者: '进入确认轮',
+};
+
 function deriveActionButtonState(config = {}) {
   const controlsBusy = Boolean(config.controlsBusy);
   const hasPanes = Boolean(config.hasPanes);
@@ -411,8 +441,164 @@ function deriveHeaderState(config = {}) {
   };
 }
 
+function getDraftStateLabel(config = {}) {
+  const consoleState = String(config.consoleState || 'idle');
+  if (consoleState === 'draft-ready') {
+    if (Boolean(config.draftNeedsRefresh)) {
+      return '需刷新';
+    }
+
+    return Boolean(config.draftSent) ? '已发送' : '可发送';
+  }
+
+  return DRAFT_STATE_LABELS[consoleState] || '待生成';
+}
+
+function getSendButtonLabel(roundType = '') {
+  return SEND_BUTTON_LABELS[roundType] || '发送本轮';
+}
+
+function getRoundReviewPrimaryLabel(config = {}) {
+  const currentRoundNumber = Number(config.currentRoundNumber || 0);
+  const totalRounds = Number(config.totalRounds || 0);
+  const nextPromptType = String(config.nextPromptType || '');
+  const nextRoundType = String(config.nextRoundType || '');
+
+  if (currentRoundNumber >= totalRounds) {
+    return '完成讨论';
+  }
+
+  if (nextPromptType === 'final-summary') {
+    return '进入总结者选择';
+  }
+
+  return ROUND_REVIEW_PRIMARY_LABELS[nextRoundType] || `进入${nextRoundType || '下一轮'}`;
+}
+
+function buildDiscussionUiStateModel(config = {}) {
+  const mode = config.mode || null;
+  const taskType = config.taskType || null;
+  const roundNumber = Number(config.roundNumber || 0);
+  const roundType = String(config.roundType || '准备开始');
+  const nextRoundNumber = roundNumber + 1;
+  const nextRoundType = String(config.nextRoundType || `第 ${nextRoundNumber} 轮`);
+  const nextPromptType = String(config.nextPromptType || '');
+  const paneCount = Number(config.paneCount || 0);
+  const topic = String(config.topic || '');
+  const draft = String(config.draft || '');
+  const roundNote = String(config.roundNote || '');
+  const consoleState = String(config.consoleState || 'idle');
+  const topicSummary = String(config.topicSummary || '');
+  const hasPanes = paneCount > 0;
+  const hasTopic = Boolean(topic.trim());
+  const hasDraft = Boolean(draft.trim());
+  const hasResolvedSummarizer = Boolean(config.hasResolvedSummarizer);
+  const stateFlags = {
+    isPreparing: Boolean(config.isPreparing),
+    isDispatching: Boolean(config.isDispatching),
+    isWaiting: Boolean(config.isWaiting),
+    isReview: Boolean(config.isReview),
+    isSummarizerSelecting: Boolean(config.isSummarizerSelecting),
+    isPartialError: Boolean(config.isPartialError),
+    isAutoPaused: Boolean(config.isAutoPaused),
+    isGlobalError: Boolean(config.isGlobalError),
+    isFinished: Boolean(config.isFinished),
+    isDraftReady: Boolean(config.isDraftReady),
+  };
+  const stateLabel = getDraftStateLabel({
+    consoleState,
+    draftSent: config.draftSent,
+    draftNeedsRefresh: config.draftNeedsRefresh,
+  });
+  const sendButtonLabel = getSendButtonLabel(roundType);
+  const roundReviewPrimaryLabel = getRoundReviewPrimaryLabel({
+    currentRoundNumber: roundNumber,
+    totalRounds: mode?.totalRounds || 0,
+    nextPromptType,
+    nextRoundType,
+  });
+  const actionState = deriveActionButtonState({
+    controlsBusy: Boolean(config.controlsBusy),
+    hasPanes,
+    hasTopic,
+    hasDraft,
+    canSkipProblemPanes: Boolean(config.canSkipProblemPanes),
+    canReset: Boolean(config.canReset),
+    autoRunActive: Boolean(config.autoRunActive),
+    currentRoundNumber: roundNumber,
+    globalErrorResumeAction: String(config.globalErrorResumeAction || ''),
+    expectedPaneCount: Number(config.expectedPaneCount || 0),
+    hasResolvedSummarizer,
+    ...stateFlags,
+    isRoundReview: stateFlags.isReview,
+  });
+  const inputState = deriveInputState({
+    topic,
+    roundNote,
+    draft,
+    isDraftReady: stateFlags.isDraftReady,
+    isPreparing: stateFlags.isPreparing,
+    isDispatching: stateFlags.isDispatching,
+    isWaiting: stateFlags.isWaiting,
+    isSummarizerSelecting: stateFlags.isSummarizerSelecting,
+  });
+  const headerState = deriveHeaderState({
+    modeLabel: mode?.label || '',
+    modeDescription: mode?.description || '',
+    modeSummary: mode?.summary || '',
+    runModeLabel: String(config.runModeLabel || ''),
+    taskTypeLabel: taskType?.label || '',
+    artifactLabel: taskType?.artifactLabel || '',
+    artifactGoal: taskType?.artifactGoal || '',
+    roundNumber,
+    totalRounds: mode?.totalRounds || 0,
+    roundType,
+    stateLabel,
+    topicSummary,
+    paneCount,
+    runMode: String(config.runMode || 'manual'),
+    summarizerLabel: String(config.summarizerLabel || '总结者'),
+    hasResolvedSummarizer,
+    feedbackMessage: String(config.feedbackMessage || ''),
+    autoPauseReason: String(config.autoPauseReason || ''),
+    roundGoalLabel: String(config.roundGoalLabel || ''),
+    roundReviewPrimaryLabel,
+    sendButtonLabel,
+    draftSent: Boolean(config.draftSent),
+    draftNeedsRefresh: Boolean(config.draftNeedsRefresh),
+    ...stateFlags,
+  });
+
+  return {
+    mode,
+    taskType,
+    artifact: {
+      label: taskType?.artifactLabel || '',
+      goal: taskType?.artifactGoal || '',
+    },
+    roundNumber,
+    roundType,
+    nextRoundType,
+    nextPromptType,
+    summarizerPaneId: String(config.summarizerPaneId || ''),
+    hasPanes,
+    hasTopic,
+    hasDraft,
+    stateLabel,
+    sendButtonLabel,
+    roundReviewPrimaryLabel,
+    actionState,
+    inputState,
+    headerState,
+  };
+}
+
 module.exports = {
+  buildDiscussionUiStateModel,
   deriveHeaderState,
   deriveActionButtonState,
   deriveInputState,
+  getDraftStateLabel,
+  getRoundReviewPrimaryLabel,
+  getSendButtonLabel,
 };

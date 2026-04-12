@@ -203,64 +203,196 @@ function isElementDisabled(element) {
   return String(element.getAttribute?.('aria-disabled') || '').toLowerCase() === 'true';
 }
 
+function isActionRequestPayload(payload) {
+  return Boolean(payload)
+    && typeof payload === 'object'
+    && !Array.isArray(payload)
+    && typeof payload.requestId === 'string'
+    && payload.requestId.trim().length > 0;
+}
+
+function normalizePaneActionResult(action, rawResult) {
+  const successStages = {
+    'text-update': 'text-injected',
+    'inject-sync-text': 'sync-text-injected',
+    'submit-message': 'message-submitted',
+  };
+  const failureStages = {
+    'text-update': 'text-inject-failed',
+    'inject-sync-text': 'sync-text-inject-failed',
+    'submit-message': 'message-submit-failed',
+  };
+
+  if (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult)) {
+    const hasExplicitOk = rawResult.ok !== undefined;
+    const ok = hasExplicitOk ? Boolean(rawResult.ok) : !rawResult.error;
+
+    return {
+      ok,
+      stage: rawResult.stage || (ok ? successStages[action] : failureStages[action]),
+      error: ok ? null : (rawResult.error || 'Pane action failed.'),
+      message: rawResult.message || null,
+      details: rawResult.details && typeof rawResult.details === 'object'
+        ? rawResult.details
+        : null,
+    };
+  }
+
+  const ok = rawResult !== false;
+  return {
+    ok,
+    stage: ok ? successStages[action] : failureStages[action],
+    error: ok ? null : 'Pane action failed.',
+    message: null,
+    details: null,
+  };
+}
+
+async function reportPaneActionResult(provider, action, payload, rawResult) {
+  if (!isActionRequestPayload(payload)) {
+    return;
+  }
+
+  const normalizedResult = normalizePaneActionResult(action, rawResult);
+  await ipcRenderer.invoke('pane-action-result', {
+    requestId: payload.requestId,
+    paneId: payload.paneId || null,
+    provider,
+    action,
+    ...normalizedResult,
+  });
+}
+
 function createSubmitHandler(provider, config, getInputElement, getSubmitElement) {
   return function submitMessage() {
     const submitElement = findVisibleElement(config[provider]?.submit);
 
     if (submitElement && !isElementDisabled(submitElement)) {
       clickElement(submitElement);
-    } else {
-      const inputElement = getInputElement();
-      if (inputElement) {
-        if (typeof inputElement.focus === 'function') {
-          inputElement.focus();
-        }
-
-        // Dispatch a robust sequence of events to simulate a real Enter key press
-        const eventOptions = {
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13,
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window // Important for some frameworks
-        };
-
-        const keydown = new KeyboardEvent('keydown', eventOptions);
-        const keypress = new KeyboardEvent('keypress', eventOptions);
-        const keyup = new KeyboardEvent('keyup', eventOptions);
-
-        inputElement.dispatchEvent(keydown);
-        inputElement.dispatchEvent(keypress);
-        inputElement.dispatchEvent(keyup);
-        
-        // Some React inputs might need a change event if the value was just set programmatically
-        // but for "Enter" submission, the key events are usually the trigger.
-      }
+      return {
+        ok: true,
+        stage: 'submit-clicked',
+      };
     }
+
+    const inputElement = getInputElement();
+    if (!inputElement) {
+      ipcRenderer.invoke('selector-error', provider, 'Input element not found');
+      return {
+        ok: false,
+        stage: 'input-missing',
+        error: 'Input element not found.',
+      };
+    }
+
+    if (typeof inputElement.focus === 'function') {
+      inputElement.focus();
+    }
+
+    const eventOptions = {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+    };
+
+    const keydown = new KeyboardEvent('keydown', eventOptions);
+    const keypress = new KeyboardEvent('keypress', eventOptions);
+    const keyup = new KeyboardEvent('keyup', eventOptions);
+
+    inputElement.dispatchEvent(keydown);
+    inputElement.dispatchEvent(keypress);
+    inputElement.dispatchEvent(keyup);
+
+    return {
+      ok: true,
+      stage: 'enter-submitted',
+    };
   };
 }
 
 function setupIPCListeners(provider, config, injectTextFn, submitFn, options = {}) {
   let lastSentText = null;
-  ipcRenderer.on('text-update', (event, text) => {
+
+  const runAndReportAction = async (action, payload, callback) => {
+    try {
+      const rawResult = await Promise.resolve(callback());
+      const normalizedResult = normalizePaneActionResult(action, rawResult);
+      if (normalizedResult.ok && Object.prototype.hasOwnProperty.call(payload, 'text')) {
+        lastSentText = String(payload.text || '');
+      }
+      await reportPaneActionResult(provider, action, payload, normalizedResult);
+      return normalizedResult;
+    } catch (error) {
+      const failureResult = {
+        ok: false,
+        stage: action === 'submit-message' ? 'message-submit-failed' : 'text-inject-failed',
+        error: error?.message || 'Pane action failed.',
+      };
+      await reportPaneActionResult(provider, action, payload, failureResult);
+      return failureResult;
+    }
+  };
+
+  ipcRenderer.on('text-update', (event, payload) => {
+    if (isActionRequestPayload(payload)) {
+      const nextText = String(payload.text || '');
+      if (nextText === lastSentText) {
+        void reportPaneActionResult(provider, 'text-update', payload, {
+          ok: true,
+          stage: 'text-unchanged',
+        });
+        return;
+      }
+
+      void runAndReportAction('text-update', payload, () => injectTextFn(nextText));
+      return;
+    }
+
+    const text = payload;
     if (text !== lastSentText) {
-      lastSentText = text;
-      injectTextFn(text);
+      const rawResult = injectTextFn(text);
+      const normalizedResult = normalizePaneActionResult('text-update', rawResult);
+      if (normalizedResult.ok) {
+        lastSentText = text;
+      }
     }
   });
 
-  ipcRenderer.on('submit-message', () => {
+  ipcRenderer.on('submit-message', (event, payload) => {
     lastSentText = null;
     if (typeof options.onBeforeSubmit === 'function') {
       options.onBeforeSubmit();
     }
+
+    if (isActionRequestPayload(payload)) {
+      void runAndReportAction('submit-message', payload, () => submitFn());
+      return;
+    }
+
     submitFn();
   });
 
-  ipcRenderer.on('inject-sync-text', (event, text) => {
+  ipcRenderer.on('inject-sync-text', (event, payload) => {
+    if (isActionRequestPayload(payload)) {
+      const nextText = String(payload.text || '');
+      const runSyncInjection = () => {
+        if (typeof options.onSyncText === 'function') {
+          return options.onSyncText(nextText);
+        }
+
+        return injectTextFn(nextText);
+      };
+
+      void runAndReportAction('inject-sync-text', payload, runSyncInjection);
+      return;
+    }
+
+    const text = payload;
     lastSentText = text;
     if (typeof options.onSyncText === 'function') {
       options.onSyncText(text);
