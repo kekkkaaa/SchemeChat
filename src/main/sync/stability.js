@@ -13,6 +13,40 @@ function fingerprintText(text) {
     .digest('hex');
 }
 
+function hasUsableReply(result) {
+  if (!result) {
+    return false;
+  }
+
+  const text = String(result.text || '').trim();
+  if (!text) {
+    return false;
+  }
+
+  if (typeof result.hasUsableReply === 'boolean') {
+    return result.hasUsableReply;
+  }
+
+  return true;
+}
+
+function buildWeakReplyError(result) {
+  const qualityReason = result?.diagnostics?.qualityReason || '';
+
+  switch (qualityReason) {
+    case 'matched-weak-pattern':
+      return 'Latest reply still looks like provider UI text, not a stable assistant reply.';
+    case 'short-root-fallback':
+      return 'Latest reply is still too short and fallback-like to trust yet.';
+    case 'short-low-structure':
+      return 'Latest reply is still too short and weakly structured to trust yet.';
+    case 'low-confidence':
+      return 'Latest reply is still too low-confidence to trust yet.';
+    default:
+      return 'Latest reply is not stable enough to trust yet.';
+  }
+}
+
 async function waitUntilNotBusy(inspectFn, options = {}) {
   const timeoutMs = options.timeoutMs || 30000;
   const pollIntervalMs = options.pollIntervalMs || 700;
@@ -69,6 +103,14 @@ async function captureUntilStable(inspectFn, options = {}, initialResult = null)
     };
   }
 
+  if (!hasUsableReply(previousResult)) {
+    return {
+      ...previousResult,
+      ok: false,
+      error: previousResult.error || buildWeakReplyError(previousResult),
+    };
+  }
+
   let previousFingerprint = previousResult.fingerprint || fingerprintText(previousResult.text);
   let stablePasses = 0;
 
@@ -92,6 +134,14 @@ async function captureUntilStable(inspectFn, options = {}, initialResult = null)
         ...currentResult,
         ok: false,
         error: currentResult.error || 'No latest reply was found.',
+      };
+    }
+
+    if (!hasUsableReply(currentResult)) {
+      return {
+        ...currentResult,
+        ok: false,
+        error: currentResult.error || buildWeakReplyError(currentResult),
       };
     }
 

@@ -1918,7 +1918,13 @@ async function captureCompletedRoundResultsForPaneIds(paneIds = []) {
   }
 
   return captureResult.results
-    .filter((result) => result?.ok && String(result?.latestReplyText || '').trim())
+    .filter((result) => {
+      const hasUsableReply = result?.hasUsableReply !== undefined
+        ? Boolean(result.hasUsableReply)
+        : Boolean(String(result?.latestReplyText || '').trim());
+
+      return result?.ok && hasUsableReply && String(result?.latestReplyText || '').trim();
+    })
     .map((result) => ({
       ...result,
       status: 'completed',

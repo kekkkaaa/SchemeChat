@@ -81,7 +81,7 @@ function createSchemeChatMcpServer(options = {}) {
 
     server.registerTool('inspect_round_status', {
       title: 'Inspect Round Status',
-      description: 'Inspect whether each target pane is idle, waiting, completed, or failed.',
+      description: 'Low-level debug tool: inspect whether each target pane is idle, waiting, completed, or failed.',
       inputSchema: {
         paneIds: z.array(z.string()).optional().describe('Optional pane IDs to inspect.'),
       },
@@ -92,7 +92,7 @@ function createSchemeChatMcpServer(options = {}) {
 
     server.registerTool('capture_latest_replies', {
       title: 'Capture Latest Replies',
-      description: 'Capture the latest stable reply text from each target pane.',
+      description: 'Low-level debug tool: capture the latest stable usable reply text from each target pane, with quality diagnostics.',
       inputSchema: {
         paneIds: z.array(z.string()).optional().describe('Optional pane IDs to capture.'),
       },
@@ -104,7 +104,7 @@ function createSchemeChatMcpServer(options = {}) {
     if (typeof options.getDiscussionFlowState === 'function') {
       server.registerTool('get_discussion_flow_state', {
         title: 'Get Discussion Flow State',
-        description: 'Inspect the current discussion controller state, including mode, round, draft, and next available actions.',
+        description: 'Recommended main-path tool: inspect the current discussion controller state, including mode, round, draft, and next available actions.',
         inputSchema: {},
       }, async () => {
         const result = await options.getDiscussionFlowState();
@@ -116,7 +116,7 @@ function createSchemeChatMcpServer(options = {}) {
       if (typeof options.updateDiscussionFlow === 'function') {
         server.registerTool('update_discussion_flow', {
           title: 'Update Discussion Flow',
-          description: 'Update discussion controller inputs such as topic, round note, draft, or run mode. Respects the same editability rules as the UI.',
+          description: 'Recommended main-path tool: update discussion controller inputs such as topic, round note, draft, or run mode. Respects the same editability rules as the UI.',
           inputSchema: {
             topic: z.string().optional().describe('Optional discussion topic. Pass an empty string to clear it.'),
             roundNote: z.string().optional().describe('Optional per-round note or temporary instruction. Pass an empty string to clear it.'),
@@ -146,7 +146,7 @@ function createSchemeChatMcpServer(options = {}) {
       if (typeof options.triggerDiscussionAction === 'function') {
         server.registerTool('trigger_discussion_action', {
           title: 'Trigger Discussion Action',
-          description: 'Trigger a high-level discussion controller action such as primary, generate, submit, resume, or next-round.',
+          description: 'Recommended main-path tool: trigger a high-level discussion controller action such as primary, generate, submit, resume, or next-round.',
           inputSchema: {
             action: z.enum([
               'primary',
@@ -175,7 +175,7 @@ function createSchemeChatMcpServer(options = {}) {
 
       server.registerTool('inject_text_to_panes', {
         title: 'Inject Text To Panes',
-        description: 'Low-level tool: mirror raw text into the target SchemeChat pane input boxes.',
+        description: 'Low-level debug/manual tool: mirror raw text into the target SchemeChat pane input boxes.',
         inputSchema: {
           paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the text. Empty means all panes.'),
           text: z.string().describe('Text to inject into the target pane inputs.'),
@@ -187,7 +187,7 @@ function createSchemeChatMcpServer(options = {}) {
 
       server.registerTool('submit_message_to_panes', {
         title: 'Submit Message To Panes',
-        description: 'Low-level tool: submit the current input box content for the target panes.',
+        description: 'Low-level debug/manual tool: submit the current input box content for the target panes.',
         inputSchema: {
           paneIds: z.array(z.string()).optional().describe('Optional pane IDs to submit. Empty means all panes.'),
         },
@@ -198,7 +198,7 @@ function createSchemeChatMcpServer(options = {}) {
 
       server.registerTool('broadcast_context_to_panes', {
         title: 'Broadcast Context To Panes',
-        description: 'Low-level tool: format a shared context block, inject it into target panes, and optionally submit it.',
+        description: 'Low-level debug/manual tool: format a shared context block, inject it into target panes, and optionally submit it.',
         inputSchema: {
           paneIds: z.array(z.string()).optional().describe('Optional pane IDs to receive the context. Empty means all panes.'),
           context: z.string().describe('The shared context to broadcast into the target pane inputs.'),

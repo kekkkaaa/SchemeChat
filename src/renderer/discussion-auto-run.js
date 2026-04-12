@@ -30,6 +30,8 @@ function buildFallbackRoundResultsFromTracks(paneIds = [], providerTracks = {}, 
       ok: true,
       busy: false,
       hasReply: true,
+      hasUsableReply: true,
+      replyQuality: 'usable',
       status: 'completed',
       error: null,
     };
@@ -51,19 +53,29 @@ function mergeRoundResults(primaryResults = [], fallbackResults = [], orderedPan
 
   return orderedIds
     .map((paneId) => resultMap.get(paneId))
-    .filter((result) => result && String(result.latestReplyText || '').trim());
+    .filter((result) => {
+      if (!result || !String(result.latestReplyText || '').trim()) {
+        return false;
+      }
+
+      return result.hasUsableReply !== false;
+    });
 }
 
 function settleInspectionResults(results = [], busyStableTracker = new Map(), now = Date.now(), stallPauseMs = 45000) {
   const settledResults = results.map((result) => {
     const latestReplyText = String(result?.latestReplyText || '');
+    const hasAnyReply = Boolean(result?.hasReply) && Boolean(latestReplyText);
+    const hasUsableReply = result?.hasUsableReply !== undefined
+      ? Boolean(result.hasUsableReply) && hasAnyReply
+      : hasAnyReply;
     const previous = busyStableTracker.get(result.paneId) || {
       latestReplyText: '',
       unchangedSince: 0,
     };
 
     let unchangedSince = 0;
-    if (result.busy && result.hasReply && latestReplyText) {
+    if (result.busy && hasAnyReply) {
       unchangedSince = previous.latestReplyText === latestReplyText
         ? (previous.unchangedSince || now)
         : now;
@@ -75,13 +87,15 @@ function settleInspectionResults(results = [], busyStableTracker = new Map(), no
     });
 
     const busyStableMs = unchangedSince > 0 ? now - unchangedSince : 0;
-    const isEffectivelyCompleted = !result.busy && result.hasReply;
+    const isEffectivelyCompleted = !result.busy && hasUsableReply;
 
     return {
       ...result,
+      hasReply: hasAnyReply,
+      hasUsableReply,
       busyStableMs,
       isEffectivelyCompleted,
-      isStalledBusy: result.busy && result.hasReply && busyStableMs >= stallPauseMs,
+      isStalledBusy: result.busy && hasAnyReply && busyStableMs >= stallPauseMs,
     };
   });
 
@@ -95,7 +109,14 @@ function settleInspectionResults(results = [], busyStableTracker = new Map(), no
 function getMissingCapturedPaneIds(paneIds = [], capturedResults = []) {
   return paneIds.filter((paneId) => {
     return !capturedResults.some((result) => {
-      return result?.paneId === paneId && result?.ok && String(result?.latestReplyText || '').trim();
+      const hasUsableReply = result?.hasUsableReply !== undefined
+        ? Boolean(result.hasUsableReply)
+        : Boolean(String(result?.latestReplyText || '').trim());
+
+      return result?.paneId === paneId
+        && result?.ok
+        && hasUsableReply
+        && String(result?.latestReplyText || '').trim();
     });
   });
 }

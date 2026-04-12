@@ -15,6 +15,8 @@ async function executeInspection(view, providerKey, pageFunction, payload) {
       providerKey,
       text: String(result?.text || ''),
       confidence: Number.isFinite(result?.confidence) ? result.confidence : 0,
+      hasUsableReply: result?.hasUsableReply !== undefined ? Boolean(result.hasUsableReply) : undefined,
+      replyQuality: result?.replyQuality || '',
       sourceMethod: result?.sourceMethod || 'dom',
       error: result?.error || null,
       diagnostics: result?.diagnostics || {},
@@ -27,6 +29,8 @@ async function executeInspection(view, providerKey, pageFunction, payload) {
       providerKey,
       text: '',
       confidence: 0,
+      hasUsableReply: false,
+      replyQuality: 'missing',
       sourceMethod: 'dom',
       error: error.message || `Failed to inspect ${providerKey}.`,
       diagnostics: {},
@@ -57,6 +61,13 @@ function runStructuredMessageInspection(spec) {
   const hostPatterns = Array.isArray(spec.hostPatterns) ? spec.hostPatterns : [];
   const minRootTextLength = Number.isFinite(spec.minRootTextLength) ? spec.minRootTextLength : 40;
   const shortReplyMinLength = Number.isFinite(spec.shortReplyMinLength) ? spec.shortReplyMinLength : 2;
+  const shortTextThreshold = Number.isFinite(spec.shortTextThreshold) ? spec.shortTextThreshold : 24;
+  const weakTextMaxLength = Number.isFinite(spec.weakTextMaxLength) ? spec.weakTextMaxLength : shortTextThreshold;
+  const minimumUsableConfidence = Number.isFinite(spec.minimumUsableConfidence) ? spec.minimumUsableConfidence : 0.3;
+  const minimumShortTextConfidence = Number.isFinite(spec.minimumShortTextConfidence) ? spec.minimumShortTextConfidence : 0.52;
+  const weakTextPatterns = Array.isArray(spec.weakTextPatterns)
+    ? spec.weakTextPatterns.map((pattern) => String(pattern).toLowerCase()).filter(Boolean)
+    : [];
   const anchorAncestorDepth = Number.isFinite(spec.anchorAncestorDepth) ? spec.anchorAncestorDepth : 6;
   const blockSelector = spec.blockSelector
     || 'p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, td, th, code';
@@ -173,6 +184,19 @@ function runStructuredMessageInspection(spec) {
     }
 
     return noisePatterns.some((pattern) => lowered === pattern || lowered.includes(pattern));
+  }
+
+  function matchesWeakTextPattern(text) {
+    if (!text) {
+      return false;
+    }
+
+    const lowered = text.toLowerCase();
+    if (text.length > weakTextMaxLength) {
+      return false;
+    }
+
+    return weakTextPatterns.some((pattern) => lowered === pattern || lowered.includes(pattern));
   }
 
   function extractOrderedText(root) {
@@ -362,6 +386,68 @@ function runStructuredMessageInspection(spec) {
     })[0];
   }
 
+  function assessReplyQuality(text, confidence, candidate) {
+    const normalizedText = normalizeText(text);
+    if (!normalizedText) {
+      return {
+        hasUsableReply: false,
+        replyQuality: 'missing',
+        qualityReason: 'empty-text',
+      };
+    }
+
+    if (matchesWeakTextPattern(normalizedText)) {
+      return {
+        hasUsableReply: false,
+        replyQuality: 'weak',
+        qualityReason: 'matched-weak-pattern',
+      };
+    }
+
+    if (confidence < minimumUsableConfidence) {
+      return {
+        hasUsableReply: false,
+        replyQuality: 'weak',
+        qualityReason: 'low-confidence',
+      };
+    }
+
+    const isShortText = normalizedText.length <= shortTextThreshold;
+    const hasStructuredContent = candidate.blockCount > 1
+      || candidate.hasAnchorDescendant
+      || (!candidate.usedRootFallback && candidate.rootMatchesKnownSelector);
+
+    if (isShortText) {
+      if (candidate.usedRootFallback && !candidate.hasAnchorDescendant) {
+        return {
+          hasUsableReply: false,
+          replyQuality: 'weak',
+          qualityReason: 'short-root-fallback',
+        };
+      }
+
+      if (!hasStructuredContent && confidence < minimumShortTextConfidence) {
+        return {
+          hasUsableReply: false,
+          replyQuality: 'weak',
+          qualityReason: 'short-low-structure',
+        };
+      }
+
+      return {
+        hasUsableReply: true,
+        replyQuality: 'usable-short',
+        qualityReason: 'accepted-short',
+      };
+    }
+
+    return {
+      hasUsableReply: true,
+      replyQuality: 'usable',
+      qualityReason: 'accepted',
+    };
+  }
+
   function isBusy() {
     const busyBySelector = queryVisible(busySelectors).length > 0;
     const busyByText = queryVisible(['button', '[role="button"]']).some((element) => {
@@ -404,6 +490,8 @@ function runStructuredMessageInspection(spec) {
       busy: false,
       text: '',
       confidence: 0,
+      hasUsableReply: false,
+      replyQuality: 'missing',
       sourceMethod: 'dom',
       error: `Host mismatch: ${window.location.hostname}`,
       diagnostics: {
@@ -423,6 +511,8 @@ function runStructuredMessageInspection(spec) {
         busy: isBusy(),
         text: '',
         confidence: 0,
+        hasUsableReply: false,
+        replyQuality: 'pending',
         sourceMethod: 'dom-pending',
         diagnostics: {
           candidateCount: candidates.length,
@@ -439,6 +529,8 @@ function runStructuredMessageInspection(spec) {
       busy: isBusy(),
       text: '',
       confidence: 0,
+      hasUsableReply: false,
+      replyQuality: 'missing',
       sourceMethod: 'dom',
       error: errorNotice || 'No latest assistant reply could be identified.',
       diagnostics: {
@@ -455,21 +547,33 @@ function runStructuredMessageInspection(spec) {
     confidence = Math.max(0.35, confidence - 0.15);
   }
 
+  const qualityAssessment = assessReplyQuality(selected.text, confidence, selected);
+  const diagnostics = {
+    candidateCount: candidates.length,
+    blockCount: selected.blockCount,
+    usedRootFallback: selected.usedRootFallback,
+    rootTextLength: selected.rootTextLength,
+    rootMatchesKnownSelector: selected.rootMatchesKnownSelector,
+    hasAnchorDescendant: selected.hasAnchorDescendant,
+    textLength: selected.text.length,
+    replyQuality: qualityAssessment.replyQuality,
+    qualityReason: qualityAssessment.qualityReason,
+    url: window.location.href,
+    title: document.title,
+  };
+
   if (errorNotice) {
     return {
       ok: false,
       busy: false,
       text: selected.text,
       confidence,
+      hasUsableReply: qualityAssessment.hasUsableReply,
+      replyQuality: qualityAssessment.replyQuality,
       sourceMethod: 'dom-error',
       error: errorNotice,
       diagnostics: {
-        candidateCount: candidates.length,
-        blockCount: selected.blockCount,
-        usedRootFallback: selected.usedRootFallback,
-        rootTextLength: selected.rootTextLength,
-        url: window.location.href,
-        title: document.title,
+        ...diagnostics,
         errorNotice,
       },
       fingerprint: selected.text,
@@ -481,15 +585,10 @@ function runStructuredMessageInspection(spec) {
     busy: isBusy(),
     text: selected.text,
     confidence,
+    hasUsableReply: qualityAssessment.hasUsableReply,
+    replyQuality: qualityAssessment.replyQuality,
     sourceMethod: 'dom',
-    diagnostics: {
-      candidateCount: candidates.length,
-      blockCount: selected.blockCount,
-      usedRootFallback: selected.usedRootFallback,
-      rootTextLength: selected.rootTextLength,
-      url: window.location.href,
-      title: document.title,
-    },
+    diagnostics,
     fingerprint: selected.text,
   };
 }

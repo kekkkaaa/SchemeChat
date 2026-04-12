@@ -506,6 +506,10 @@ async function inspectProviderRoundStatusesForPaneIds(paneIds) {
 
   return {
     ok: results.every((result) => result.ok),
+    requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+    resolvedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+    capturedAt: new Date().toISOString(),
+    summary: buildInspectionSummary(results),
     results,
   };
 }
@@ -529,6 +533,10 @@ async function captureProviderRoundResultsForPaneIds(paneIds) {
 
   return {
     ok: results.every((result) => result.ok),
+    requestedPaneIds: Array.isArray(paneIds) ? paneIds.filter(Boolean) : [],
+    resolvedPaneIds: paneEntries.map((paneEntry) => paneEntry.id),
+    capturedAt: new Date().toISOString(),
+    summary: buildInspectionSummary(results),
     results,
   };
 }
@@ -577,23 +585,91 @@ function sendChannelToPaneEntries(paneEntries, channel, payload) {
 
 function buildInspectionPayload(paneEntry, inspectionResult) {
   const latestReplyText = inspectionResult?.latestReplyText || inspectionResult?.text || '';
+  const hasReply = Boolean(latestReplyText);
+  const hasUsableReply = inspectionResult?.hasUsableReply !== undefined
+    ? Boolean(inspectionResult.hasUsableReply) && hasReply
+    : hasReply;
+  const status = !inspectionResult?.ok
+    ? 'failed'
+    : inspectionResult?.busy
+      ? 'waiting'
+      : hasUsableReply
+        ? 'completed'
+        : hasReply
+          ? 'waiting'
+          : 'idle';
+  const statusReason = !inspectionResult?.ok
+    ? (hasReply && !hasUsableReply ? 'weak-reply' : 'inspection-failed')
+    : inspectionResult?.busy
+      ? 'provider-busy'
+      : hasUsableReply
+        ? 'usable-reply'
+        : hasReply
+          ? `weak-reply:${inspectionResult?.replyQuality || 'weak'}`
+          : inspectionResult?.sourceMethod === 'dom-pending'
+            ? 'pending-latest-reply'
+            : 'no-reply';
+
   return {
     paneId: paneEntry.id,
     providerKey: paneEntry?.view?.providerKey || paneEntry?.providerKey || '',
     providerName: getPaneLabel(paneEntry),
+    url: paneEntry?.view?.webContents?.getURL?.() || '',
+    title: paneEntry?.view?.webContents?.getTitle?.() || '',
+    isLoading: Boolean(paneEntry?.view?.webContents?.isLoading?.()),
     ok: Boolean(inspectionResult?.ok),
     busy: Boolean(inspectionResult?.busy),
     latestReplyText,
-    hasReply: Boolean(latestReplyText),
+    replyLength: latestReplyText.length,
+    hasReply,
+    hasUsableReply,
+    replyQuality: inspectionResult?.replyQuality || (hasUsableReply ? 'usable' : hasReply ? 'weak' : 'missing'),
+    confidence: Number.isFinite(inspectionResult?.confidence) ? inspectionResult.confidence : 0,
+    sourceMethod: inspectionResult?.sourceMethod || 'dom',
+    diagnostics: inspectionResult?.diagnostics || {},
     error: inspectionResult?.error || null,
-    status: !inspectionResult?.ok
-      ? 'failed'
-      : inspectionResult?.busy
-        ? 'waiting'
-        : latestReplyText
-          ? 'completed'
-          : 'idle',
+    status,
+    statusReason,
   };
+}
+
+function buildInspectionSummary(results = []) {
+  const normalizedResults = Array.isArray(results) ? results : [];
+
+  return normalizedResults.reduce((summary, result) => {
+    summary.total += 1;
+
+    if (result?.status === 'completed') {
+      summary.completed += 1;
+    } else if (result?.status === 'waiting') {
+      summary.waiting += 1;
+    } else if (result?.status === 'idle' || result?.status === 'ready') {
+      summary.idle += 1;
+    } else if (result?.status === 'failed') {
+      summary.failed += 1;
+    }
+
+    if (result?.hasReply) {
+      summary.withReply += 1;
+    }
+
+    if (result?.hasUsableReply) {
+      summary.withUsableReply += 1;
+    } else if (result?.hasReply) {
+      summary.weakReply += 1;
+    }
+
+    return summary;
+  }, {
+    total: 0,
+    completed: 0,
+    waiting: 0,
+    idle: 0,
+    failed: 0,
+    withReply: 0,
+    withUsableReply: 0,
+    weakReply: 0,
+  });
 }
 
 function buildPrivateNewChatResponse(paneEntries, receivedResults) {

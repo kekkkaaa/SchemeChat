@@ -63,12 +63,14 @@
 
       <section class="help-section">
         <div class="section-title">推荐用法</div>
-        <p class="desc">优先使用讨论流程工具，而不是先手动调用底层输入框写入和发送。</p>
+        <p class="desc"><strong>默认主路</strong>：让 Codex / Claude Code 优先走讨论流程工具，不要把 <code class="ic">inject -&gt; submit -&gt; capture</code> 当成完整多轮编排主路。</p>
+        <p class="desc">推荐顺序是：先用 <code class="ic">get_discussion_flow_state</code> 读状态，再用 <code class="ic">update_discussion_flow</code> 改 topic / 本轮补充 / draft / runMode，最后用 <code class="ic">trigger_discussion_action</code> 触发开始、发送、继续、下一步等动作。</p>
         <p class="desc">写操作工具默认关闭。如需 <code class="ic">update_discussion_flow</code>、<code class="ic">trigger_discussion_action</code> 等能力，请先在应用 <strong>Settings</strong> 中开启 <strong>MCP Write Tools</strong>。这个开关会持久保存，之后正常双击 exe 启动也会按该设置生效。</p>
         <p class="desc"><strong>get_discussion_flow_state</strong> 用来读当前轮次、Draft、推进模式和下一步可执行动作。</p>
         <p class="desc"><strong>update_discussion_flow</strong> 用来改 topic / 本轮补充 / draft / runMode，遵守和界面一致的可编辑规则。</p>
-        <p class="desc"><strong>trigger_discussion_action</strong> 会复用 SchemeChat 的自动/手动讨论流程，不再自己重新拼发送、等待和抓取。</p>
-        <p class="desc">长时间自动流程建议把 <code class="ic">waitForCompletion</code> 设为 <code class="ic">false</code>，然后用状态工具继续轮询。</p>
+        <p class="desc"><strong>trigger_discussion_action</strong> 会复用 SchemeChat 现有的自动/手动讨论流程，由应用自己负责发送、等待、暂停、补抓和下一轮推进。</p>
+        <p class="desc">长时间自动流程建议把 <code class="ic">waitForCompletion</code> 设为 <code class="ic">false</code>，然后继续用状态工具观察流程进度。</p>
+        <p class="desc"><strong>低层工具定位</strong>：<code class="ic">inject_text_to_panes</code>、<code class="ic">submit_message_to_panes</code>、<code class="ic">capture_latest_replies</code> 更适合调试、补充上下文或人工干预，不建议直接拿来自己拼完整 round loop。</p>
       </section>
 
       <!-- 可用工具 -->
@@ -81,23 +83,23 @@
           </div>
           <div class="tool read">
             <span class="tool-name">inspect_round_status</span>
-            <span class="tool-desc">检查各面板是否正在回复</span>
+            <span class="tool-desc">低层调试：检查各面板当前是否正在回复</span>
           </div>
           <div class="tool read">
             <span class="tool-name">capture_latest_replies</span>
-            <span class="tool-desc">抓取各面板最新 AI 回复内容</span>
+            <span class="tool-desc">低层调试：抓取各面板最新 AI 回复内容</span>
           </div>
           <div class="tool read">
             <span class="tool-name">get_discussion_flow_state</span>
-            <span class="tool-desc">查看讨论流程状态、当前 Draft 和下一步动作</span>
+            <span class="tool-desc">主路：查看讨论流程状态、当前 Draft 和下一步动作</span>
           </div>
           <div class="tool write">
             <span class="tool-name">update_discussion_flow</span>
-            <span class="tool-desc">更新 topic、本轮补充、draft 或 runMode</span>
+            <span class="tool-desc">主路：更新 topic、本轮补充、draft 或 runMode</span>
           </div>
           <div class="tool write">
             <span class="tool-name">trigger_discussion_action</span>
-            <span class="tool-desc">触发开始、发送、继续、下一步等高层讨论动作</span>
+            <span class="tool-desc">主路：触发开始、发送、继续、下一步等高层讨论动作</span>
           </div>
           <div class="tool write">
             <span class="tool-name">inject_text_to_panes</span>
