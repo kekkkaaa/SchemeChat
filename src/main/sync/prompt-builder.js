@@ -1,3 +1,8 @@
+const {
+  TASK_TYPE_OPTIONS,
+  getTaskTypeOption,
+} = require('../../renderer/discussion-core');
+
 function normalizePromptText(text) {
   return String(text || '')
     .replace(/\r/g, '')
@@ -34,6 +39,14 @@ function buildPromptBody(config) {
   const lines = [];
   if (config.topic) {
     lines.push(`题目：${config.topic}`);
+  }
+
+  if (config.taskTypeLine) {
+    lines.push(config.taskTypeLine);
+  }
+
+  if (config.taskFocusLine) {
+    lines.push(config.taskFocusLine);
   }
 
   lines.push(config.intro);
@@ -86,11 +99,20 @@ function getPromptConfig(promptType, options = {}) {
   const normalizedTopic = options.topic ? normalizePromptText(options.topic) : '';
   const sourceCount = Number.isFinite(options.sourceCount) ? options.sourceCount : 0;
   const summarizerName = normalizePromptText(options.summarizerName || '');
+  const taskTypeOption = options.taskTypeId
+    ? getTaskTypeOption(TASK_TYPE_OPTIONS, options.taskTypeId)
+    : null;
+  const taskTypeLine = taskTypeOption
+    ? `任务类型：${taskTypeOption.label}（${taskTypeOption.developerLabel}）。目标结果物：${taskTypeOption.artifactLabel}。`
+    : '';
+  const taskFocusLine = taskTypeOption?.followupFocusPrompt || '';
 
   switch (promptType) {
     case 'discussion':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: '继续交叉讨论，不要寒暄。',
         structure: getDiscussionStructureLine(sourceCount),
         requirements: '要求：高压缩，只保留影响判断的新信息，不重复题面。',
@@ -99,6 +121,8 @@ function getPromptConfig(promptType, options = {}) {
     case 'questioning':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: '继续交叉质疑，不要寒暄。',
         structure: '请用 1/2/3 输出：1. 你认为其他 AI 最值得质疑的点 2. 你因此修正了自己哪一点 3. 你的更新立场。',
         requirements: '要求：高压缩，只点出真正影响结论的冲突、漏洞和修正，不重复题面。',
@@ -107,6 +131,8 @@ function getPromptConfig(promptType, options = {}) {
     case 'compression':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: '继续压缩分歧，不要寒暄。',
         structure: '请用 1/2/3 输出：1. 当前最稳共识 2. 仍影响决策的剩余分歧 3. 你的压缩结论或建议。',
         requirements: '要求：优先基于其他 AI 上一轮回复继续收束，只保留仍影响决策的内容。',
@@ -115,6 +141,8 @@ function getPromptConfig(promptType, options = {}) {
     case 'revision':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: '继续修正方案，不要寒暄。',
         structure: '请用 1/2/3 输出：1. 你决定保留的结论 2. 你基于他方观点做的修正 3. 修正后的方案或判断。',
         requirements: '要求：优先基于其他 AI 上一轮回复修正方案，明确保留什么、修正什么、为什么修正。',
@@ -123,6 +151,8 @@ function getPromptConfig(promptType, options = {}) {
     case 'confirmation':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: '继续确认收束，不要寒暄。',
         structure: '请用 1/2/3 输出：1. 当前最稳结论 2. 是否还有关键异议 3. 你建议谁来做最终总结，以及一句理由。',
         requirements: '要求：优先基于其他 AI 上一轮回复做最后检查，只保留仍影响收束的判断。',
@@ -131,6 +161,8 @@ function getPromptConfig(promptType, options = {}) {
     case 'final-summary':
       return {
         topic: normalizedTopic,
+        taskTypeLine,
+        taskFocusLine,
         intro: summarizerName
           ? `你是本轮总结者（${summarizerName}），请输出最终方案，不要寒暄。`
           : '你是本轮总结者，请输出最终方案，不要寒暄。',

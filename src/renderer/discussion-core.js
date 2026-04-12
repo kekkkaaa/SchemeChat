@@ -1,24 +1,60 @@
 const MODE_OPTIONS = [
   {
     id: 'fast-3',
-    label: '3 轮快收束',
+    label: 'Quick',
     totalRounds: 3,
-    description: '独立分析 -> 交叉讨论 -> 最终总结',
-    summary: '独立分析 · 交叉讨论',
+    description: '3 轮：独立分析 -> 交叉讨论 -> 最终总结',
+    summary: 'Quick · 3 轮快速收束',
   },
   {
     id: 'standard-4',
-    label: '4 轮标准',
+    label: 'Standard',
     totalRounds: 4,
-    description: '独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结',
-    summary: '独立分析 · 分歧压缩',
+    description: '4 轮：独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结',
+    summary: 'Standard · 4 轮平衡推进',
   },
   {
     id: 'deep-5',
-    label: '5 轮深推演',
+    label: 'Deep',
     totalRounds: 5,
-    description: '独立分析 -> 交叉质疑 -> 修正方案 -> 确认总结者 -> 最终总结',
-    summary: '独立分析 · 修正方案',
+    description: '5 轮：独立分析 -> 交叉质疑 -> 修正方案 -> 确认总结者 -> 最终总结',
+    summary: 'Deep · 5 轮深入推演',
+  },
+];
+
+const TASK_TYPE_OPTIONS = [
+  {
+    id: 'explore',
+    label: '分析问题',
+    developerLabel: 'Explore',
+    description: '先澄清问题、比较方案，并压缩真正影响判断的分歧。',
+    artifactLabel: 'Decision Brief',
+    artifactGoal: '收束当前最稳判断、关键分歧与主要风险。',
+    roundOneStructure: '请用 1/2/3 输出：1. 核心结论 2. 关键依据或判断路径 3. 主要不足、风险或最不确定的一点。',
+    roundOneFocusPrompt: '请优先澄清问题、比较方案，并指出仍影响判断的风险与分歧。',
+    followupFocusPrompt: '请继续围绕问题理解、方案对比、共识与分歧推进，不要滑向空泛表态。',
+  },
+  {
+    id: 'execute',
+    label: '生成方案',
+    developerLabel: 'Execute',
+    description: '先给可执行方案，再拆关键步骤、验收重点和落地风险。',
+    artifactLabel: 'Execution Plan',
+    artifactGoal: '沉淀可直接执行的方案、步骤、验收重点与阻塞项。',
+    roundOneStructure: '请用 1/2/3 输出：1. 推荐方案或执行方向 2. 关键步骤、资源或拆解路径 3. 主要风险、阻塞点或验收重点。',
+    roundOneFocusPrompt: '请优先给可执行方案，不要只停留在抽象分析。',
+    followupFocusPrompt: '请继续围绕可执行方案、任务拆解、验收标准和风险推进，不要退回纯观点罗列。',
+  },
+  {
+    id: 'review',
+    label: '检查结果',
+    developerLabel: 'Review',
+    description: '先找关键问题，再判断风险、缺口和后续修改建议。',
+    artifactLabel: 'Review Memo',
+    artifactGoal: '明确关键问题、风险结论与后续修改建议。',
+    roundOneStructure: '请用 1/2/3 输出：1. 关键判断或总体结论 2. 最主要的问题、风险或缺口 3. 建议修改、验证或后续动作。',
+    roundOneFocusPrompt: '请优先找问题和风险，不要只做中性总结。',
+    followupFocusPrompt: '请继续围绕问题定位、风险判断、修复建议和是否通过推进，保持审查视角。',
   },
 ];
 
@@ -135,6 +171,12 @@ function getModeOption(modeOptions, modeId) {
     || null;
 }
 
+function getTaskTypeOption(taskTypeOptions, taskTypeId) {
+  return (Array.isArray(taskTypeOptions) ? taskTypeOptions : []).find((option) => option.id === taskTypeId)
+    || (Array.isArray(taskTypeOptions) ? taskTypeOptions[0] : null)
+    || null;
+}
+
 function getRoundTypeLabel(roundTypeLabels, roundNumber, modeId) {
   const labels = roundTypeLabels?.[modeId] || roundTypeLabels?.['standard-4'] || [];
   if (!Number.isFinite(roundNumber) || roundNumber <= 0) {
@@ -192,8 +234,10 @@ function getProviderPriorityFallbackPaneId(results, priorityMap, paneFallbackId)
 function buildRoundOneDraftText(config) {
   const stickyRuleOptions = Array.isArray(config?.stickyRuleOptions) ? config.stickyRuleOptions : [];
   const quickPromptOptions = Array.isArray(config?.quickPromptOptions) ? config.quickPromptOptions : [];
+  const taskTypeOptions = Array.isArray(config?.taskTypeOptions) ? config.taskTypeOptions : [];
   const stickyRuleIds = Array.isArray(config?.stickyRuleIds) ? config.stickyRuleIds : [];
   const quickPromptIds = Array.isArray(config?.quickPromptIds) ? config.quickPromptIds : [];
+  const taskTypeOption = getTaskTypeOption(taskTypeOptions, config?.taskTypeId);
 
   const stickyRules = stickyRuleOptions.filter((option) => stickyRuleIds.includes(option.id));
   const quickPrompts = quickPromptOptions.filter((option) => quickPromptIds.includes(option.id));
@@ -206,9 +250,13 @@ function buildRoundOneDraftText(config) {
 
   const lines = [
     '第 1 轮独立分析，不回应其他 AI。',
+    taskTypeOption
+      ? `任务类型：${taskTypeOption.label}（${taskTypeOption.developerLabel}）。目标结果物：${taskTypeOption.artifactLabel}。`
+      : '',
+    taskTypeOption?.roundOneFocusPrompt || '',
     `题目：${String(config?.topic || '').trim()}`,
-    '请用 1/2/3 输出：1. 核心结论 2. 关键依据或判断路径 3. 主要不足、风险或最不确定的一点。',
-  ];
+    taskTypeOption?.roundOneStructure || '请用 1/2/3 输出：1. 核心结论 2. 关键依据或判断路径 3. 主要不足、风险或最不确定的一点。',
+  ].filter(Boolean);
 
   if (requirementParts.length > 0) {
     lines.push(`要求：${requirementParts.join('；')}。`);
@@ -698,6 +746,7 @@ module.exports = {
   STICKY_RULE_OPTIONS,
   STICKY_RULE_SUMMARIES,
   SUMMARIZER_PROVIDER_PRIORITY,
+  TASK_TYPE_OPTIONS,
   buildRoundOneDraftText,
   buildStructuredMaterialPack,
   chooseAutoSummarizerPaneId,
@@ -707,4 +756,5 @@ module.exports = {
   getModeOption,
   getRoundGoalLabel,
   getRoundTypeLabel,
+  getTaskTypeOption,
 };

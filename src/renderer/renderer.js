@@ -14,6 +14,7 @@ const {
   STICKY_RULE_OPTIONS,
   STICKY_RULE_SUMMARIES,
   SUMMARIZER_PROVIDER_PRIORITY,
+  TASK_TYPE_OPTIONS,
   buildRoundOneDraftText,
   chooseAutoSummarizerPaneId: chooseAutoSummarizerPaneIdFromCore,
   getAutoPromptType: getAutoPromptTypeFromCore,
@@ -22,6 +23,7 @@ const {
   getModeOption: getModeOptionFromCore,
   getRoundGoalLabel: getRoundGoalLabelFromCore,
   getRoundTypeLabel: getRoundTypeLabelFromCore,
+  getTaskTypeOption: getTaskTypeOptionFromCore,
 } = require('./discussion-core');
 const {
   buildFallbackRoundResultsFromTracks: buildFallbackRoundResultsFromAutoRun,
@@ -41,6 +43,7 @@ const state = {
   isPanelExpanded: false,
   consoleState: 'idle',
   runMode: 'auto',
+  taskTypeId: 'explore',
   modeId: 'standard-4',
   stickyRuleIds: [...DEFAULT_STICKY_RULE_IDS],
   quickPromptIds: [],
@@ -93,6 +96,7 @@ const refs = {
   toggleConsoleBtn: document.getElementById('toggleConsoleBtn'),
   collapseConsoleBtn: document.getElementById('collapseConsoleBtn'),
   dockStageBadge: document.getElementById('dockStageBadge'),
+  dockTaskBadge: document.getElementById('dockTaskBadge'),
   dockModeBadge: document.getElementById('dockModeBadge'),
   dockStateBadge: document.getElementById('dockStateBadge'),
   dockInputLabel: document.getElementById('dockInputLabel'),
@@ -107,6 +111,7 @@ const refs = {
   workspaceSubtitle: document.getElementById('workspaceSubtitle'),
   draftStatusBadge: document.getElementById('draftStatusBadge'),
   stageBadge: document.getElementById('stageBadge'),
+  taskBadge: document.getElementById('taskBadge'),
   roundBadge: document.getElementById('roundBadge'),
   modeBadge: document.getElementById('modeBadge'),
   roundGoalText: document.getElementById('roundGoalText'),
@@ -133,8 +138,10 @@ const refs = {
   roundHistoryCountBadge: document.getElementById('roundHistoryCountBadge'),
   roundHistoryList: document.getElementById('roundHistoryList'),
   modeDescription: document.getElementById('modeDescription'),
+  taskTypeDescription: document.getElementById('taskTypeDescription'),
   modeFlowHint: document.getElementById('modeFlowHint'),
   supportSummaryMeta: document.getElementById('supportSummaryMeta'),
+  taskTypeSelector: document.getElementById('taskTypeSelector'),
   modeSelector: document.getElementById('modeSelector'),
   idlePanel: document.getElementById('idlePanel'),
   topicInput: document.getElementById('topicInput'),
@@ -190,6 +197,10 @@ function getModeOption() {
   return getModeOptionFromCore(MODE_OPTIONS, state.modeId);
 }
 
+function getTaskTypeOption() {
+  return getTaskTypeOptionFromCore(TASK_TYPE_OPTIONS, state.taskTypeId);
+}
+
 function getStickyRuleOptions() {
   return STICKY_RULE_OPTIONS.filter((option) => state.stickyRuleIds.includes(option.id));
 }
@@ -208,6 +219,15 @@ function getPaneEntryById(paneId) {
 
 function getDraftPaneIds() {
   return getUniquePaneIds(state.draftPaneIds);
+}
+
+function isPresetSelectorLocked() {
+  return syncInFlight
+    || privateNewChatInFlight
+    || isWaitingState()
+    || isAutoPausedState()
+    || isFinishedState()
+    || state.autoRunActive;
 }
 
 function setDraftPaneIds(paneIds = []) {
@@ -688,13 +708,14 @@ function getCurrentRoundScopeLabel(paneIds = getScopePaneIds()) {
 }
 
 function refreshIdleFeedback() {
+  const taskType = getTaskTypeOption();
   if (state.consoleState !== 'idle') {
     return;
   }
 
   setFeedback(state.topic.trim() ? '可生成首轮 Draft' : '先输入讨论主题', {
     meta: state.topic.trim()
-      ? '可继续补充本轮限制，或直接开始'
+      ? `当前任务类型：${taskType.label} · 目标结果物：${taskType.artifactLabel}。${taskType.artifactGoal || ''} 可继续补充本轮限制，或直接开始。`.trim()
       : '写清这轮要讨论的问题、任务或方案。',
   });
 }
@@ -716,8 +737,10 @@ function markDraftStale(message) {
 
 function buildRoundOneDraft() {
   return buildRoundOneDraftText({
+    taskTypeId: state.taskTypeId,
     topic: state.topic,
     roundNote: state.roundNote,
+    taskTypeOptions: TASK_TYPE_OPTIONS,
     stickyRuleIds: state.stickyRuleIds,
     quickPromptIds: state.quickPromptIds,
     stickyRuleOptions: STICKY_RULE_OPTIONS,
@@ -901,23 +924,49 @@ function renderTemporaryTags() {
 
 function renderModeSelector() {
   refs.modeSelector.innerHTML = '';
-  const selectorLocked = syncInFlight || privateNewChatInFlight || isWaitingState() || isAutoPausedState() || isFinishedState() || state.autoRunActive;
+  const selectorLocked = isPresetSelectorLocked();
 
   MODE_OPTIONS.forEach((option) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `segment-btn${option.id === state.modeId ? ' is-selected' : ''}`;
     button.textContent = option.label;
+    button.title = option.description;
     button.disabled = selectorLocked;
     button.addEventListener('click', () => {
       state.modeId = option.id;
       if (state.currentRoundNumber > 0) {
         state.currentRoundType = getRoundTypeLabel(state.currentRoundNumber, option.id);
       }
-      markDraftStale(`已切换轮次模式：${option.label}`);
+      markDraftStale(`已切换讨论强度：${option.label}`);
       render();
     });
     refs.modeSelector.appendChild(button);
+  });
+}
+
+function renderTaskTypeSelector() {
+  refs.taskTypeSelector.innerHTML = '';
+  const selectorLocked = isPresetSelectorLocked();
+
+  TASK_TYPE_OPTIONS.forEach((option) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `segment-btn${option.id === state.taskTypeId ? ' is-selected' : ''}`;
+    button.textContent = option.label;
+    button.title = `${option.developerLabel} · ${option.artifactLabel}`;
+    button.disabled = selectorLocked;
+    button.addEventListener('click', () => {
+      if (option.id === state.taskTypeId) {
+        return;
+      }
+
+      state.taskTypeId = option.id;
+      markDraftStale(`已切换任务类型：${option.label}`);
+      render();
+      refreshIdleFeedback();
+    });
+    refs.taskTypeSelector.appendChild(button);
   });
 }
 
@@ -926,6 +975,7 @@ function renderDraftSourcesPanel() {
 }
 
 function renderSupportSummaries() {
+  const taskType = getTaskTypeOption();
   const stickyCount = getStickyRuleOptions().length;
   const temporaryCount = getQuickPromptOptions().length + (state.roundNote.trim() ? 1 : 0);
   const topicSummary = state.topic.trim() ? '主题已填' : '待填主题';
@@ -934,8 +984,8 @@ function renderSupportSummaries() {
   const runModeSummary = state.runMode === 'auto' ? '自动推进' : '手动推进';
   const summarizerSummary = state.summarizerSelectionSource === 'manual' ? '手动总结者' : '自动总结者';
 
-  refs.supportSummaryMeta.textContent = `${runModeSummary} · ${ruleSummary} · ${tempSummary}`;
-  refs.draftSourcesSummaryText.textContent = `${topicSummary} · ${runModeSummary} · ${summarizerSummary} · ${tempSummary}`;
+  refs.supportSummaryMeta.textContent = `${taskType.label} · ${taskType.artifactLabel} · ${runModeSummary} · ${ruleSummary} · ${tempSummary}`;
+  refs.draftSourcesSummaryText.textContent = `${topicSummary} · ${taskType.artifactLabel} · ${summarizerSummary} · ${tempSummary}`;
   refs.moreActionsSummaryText.textContent = isDraftReadyState()
     ? '新对话 / 刷新 / 回到准备阶段'
     : '新对话 / 刷新 / 缩放';
@@ -1031,13 +1081,14 @@ function renderRoundHistory() {
 }
 
 function updateDraftSources() {
+  const taskType = getTaskTypeOption();
   refs.sourceQuestionValue.textContent = state.topic.trim()
     ? summarizeText(state.topic, 80)
     : '尚未填写';
 
   const stickyLabels = getStickyRuleOptions().map((option) => option.label);
   refs.sourceRulesValue.textContent = stickyLabels.length > 0 ? stickyLabels.join(' / ') : '0 条';
-  refs.sourceTemplateValue.textContent = `${state.currentRoundType || '首轮分析'}模板`;
+  refs.sourceTemplateValue.textContent = `${taskType.label} · ${state.currentRoundType || '首轮分析'}模板`;
 
   const temporarySources = getQuickPromptOptions().map((option) => option.tag);
   if (state.roundNote.trim()) {
@@ -1061,6 +1112,7 @@ function renderPanelVisibility() {
 
 function renderHeader() {
   const mode = getModeOption();
+  const taskType = getTaskTypeOption();
   const roundNumber = state.currentRoundNumber || 0;
   const roundType = state.currentRoundType || getRoundTypeLabel(roundNumber);
   const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
@@ -1069,6 +1121,9 @@ function renderHeader() {
     modeDescription: mode.description,
     modeSummary: mode.summary,
     runModeLabel: getRunModeLabel(),
+    taskTypeLabel: taskType.label,
+    artifactLabel: taskType.artifactLabel,
+    artifactGoal: taskType.artifactGoal,
     roundNumber,
     totalRounds: mode.totalRounds,
     roundType,
@@ -1103,11 +1158,15 @@ function renderHeader() {
   refs.modeDescription.title = headerState.modeDescriptionTitle;
   refs.modeFlowHint.textContent = headerState.modeFlowHintText;
   refs.modeFlowHint.title = headerState.modeFlowHintTitle;
+  refs.taskTypeDescription.textContent = `${taskType.artifactLabel} · ${taskType.artifactGoal || taskType.description}`;
+  refs.taskTypeDescription.title = `${taskType.label} / ${taskType.developerLabel} · ${taskType.description}`;
   refs.workspaceEyebrow.textContent = headerState.workspaceEyebrowText;
   refs.launcherRunModeBtn.textContent = headerState.launcherRunModeText;
   refs.panelRunModeBtn.textContent = headerState.panelRunModeText;
   refs.stageBadge.textContent = headerState.stageBadgeText;
   refs.dockStageBadge.textContent = headerState.dockStageBadgeText;
+  refs.taskBadge.textContent = taskType.label;
+  refs.dockTaskBadge.textContent = taskType.label;
   refs.roundBadge.textContent = headerState.roundBadgeText;
   refs.roundGoalText.textContent = headerState.roundGoalText;
   refs.workspaceTitle.textContent = headerState.workspaceTitleText;
@@ -1207,6 +1266,11 @@ function renderInputs() {
 
 function buildDiscussionUiStateModel() {
   const mode = getModeOption();
+  const taskType = getTaskTypeOption();
+  const artifact = {
+    label: taskType?.artifactLabel || '',
+    goal: taskType?.artifactGoal || '',
+  };
   const roundNumber = state.currentRoundNumber || 0;
   const roundType = state.currentRoundType || getRoundTypeLabel(roundNumber);
   const summarizerPaneId = getResolvedSummarizerPaneId() || chooseAutoSummarizerPaneId();
@@ -1255,6 +1319,9 @@ function buildDiscussionUiStateModel() {
     modeDescription: mode.description,
     modeSummary: mode.summary,
     runModeLabel: getRunModeLabel(),
+    taskTypeLabel: taskType.label,
+    artifactLabel: artifact.label,
+    artifactGoal: artifact.goal,
     roundNumber,
     totalRounds: mode.totalRounds,
     roundType,
@@ -1285,6 +1352,8 @@ function buildDiscussionUiStateModel() {
 
   return {
     mode,
+    taskType,
+    artifact,
     roundNumber,
     roundType,
     summarizerPaneId,
@@ -1342,6 +1411,18 @@ function buildDiscussionControlSnapshot() {
     discussionConsoleExpanded: state.isPanelExpanded,
     consoleState: state.consoleState,
     runMode: state.runMode,
+    taskType: {
+      id: state.taskTypeId,
+      label: uiState.taskType.label,
+      developerLabel: uiState.taskType.developerLabel,
+      description: uiState.taskType.description,
+      artifactLabel: uiState.taskType.artifactLabel,
+      artifactGoal: uiState.taskType.artifactGoal,
+    },
+    artifact: {
+      label: uiState.artifact.label,
+      goal: uiState.artifact.goal,
+    },
     modeId: state.modeId,
     modeLabel: uiState.mode.label,
     totalRounds: uiState.mode.totalRounds,
@@ -1414,8 +1495,9 @@ async function updateDiscussionControlState(patch = {}) {
   const hasDraftPatch = hasOwnPatchValue(normalizedPatch, 'draft');
   const hasRunModePatch = hasOwnPatchValue(normalizedPatch, 'runMode');
   const hasModeIdPatch = hasOwnPatchValue(normalizedPatch, 'modeId');
+  const hasTaskTypePatch = hasOwnPatchValue(normalizedPatch, 'taskType') || hasOwnPatchValue(normalizedPatch, 'taskTypeId');
 
-  if (!hasTopicPatch && !hasRoundNotePatch && !hasDraftPatch && !hasRunModePatch && !hasModeIdPatch) {
+  if (!hasTopicPatch && !hasRoundNotePatch && !hasDraftPatch && !hasRunModePatch && !hasModeIdPatch && !hasTaskTypePatch) {
     return {
       ok: true,
       message: 'No discussion fields were updated.',
@@ -1456,7 +1538,7 @@ async function updateDiscussionControlState(patch = {}) {
     if (!nextModeOption) {
       return {
         ok: false,
-        message: `Unsupported discussion mode: ${nextModeId || 'empty'}.`,
+        message: `Unsupported discussion intensity preset: ${nextModeId || 'empty'}.`,
         state: buildDiscussionControlSnapshot(),
       };
     }
@@ -1471,7 +1553,7 @@ async function updateDiscussionControlState(patch = {}) {
     if (selectorLocked && nextModeId !== state.modeId) {
       return {
         ok: false,
-        message: 'The current discussion state does not allow switching the round preset right now.',
+        message: 'The current discussion state does not allow switching the discussion intensity right now.',
         state: buildDiscussionControlSnapshot(),
       };
     }
@@ -1482,9 +1564,42 @@ async function updateDiscussionControlState(patch = {}) {
         state.currentRoundType = getRoundTypeLabel(state.currentRoundNumber, nextModeId);
       }
       if (isDraftReadyState()) {
-        markDraftStale(`已通过 MCP 切换轮次模式：${nextModeOption.label}`);
+        markDraftStale(`已通过 MCP 切换讨论强度：${nextModeOption.label}`);
       }
       messages.push(`已切换到${nextModeOption.label}`);
+    }
+  }
+
+  if (hasTaskTypePatch) {
+    const nextTaskTypeId = String(
+      hasOwnPatchValue(normalizedPatch, 'taskType')
+        ? normalizedPatch.taskType
+        : normalizedPatch.taskTypeId
+    ).trim();
+    const nextTaskTypeOption = TASK_TYPE_OPTIONS.find((option) => option.id === nextTaskTypeId);
+    if (!nextTaskTypeOption) {
+      return {
+        ok: false,
+        message: `Unsupported discussion task type: ${nextTaskTypeId || 'empty'}.`,
+        state: buildDiscussionControlSnapshot(),
+      };
+    }
+
+    const selectorLocked = isPresetSelectorLocked();
+    if (selectorLocked && nextTaskTypeId !== state.taskTypeId) {
+      return {
+        ok: false,
+        message: 'The current discussion state does not allow switching the task type right now.',
+        state: buildDiscussionControlSnapshot(),
+      };
+    }
+
+    if (nextTaskTypeId !== state.taskTypeId) {
+      state.taskTypeId = nextTaskTypeId;
+      if (isDraftReadyState()) {
+        markDraftStale(`已通过 MCP 切换任务类型：${nextTaskTypeOption.label}`);
+      }
+      messages.push(`已切换到${nextTaskTypeOption.label}`);
     }
   }
 
@@ -1530,7 +1645,7 @@ async function updateDiscussionControlState(patch = {}) {
 
   render();
 
-  if (hasTopicPatch || hasRoundNotePatch) {
+  if (hasTopicPatch || hasRoundNotePatch || hasTaskTypePatch) {
     refreshIdleFeedback();
   }
 
@@ -1742,6 +1857,7 @@ function render() {
   refs.floatingPanel.classList.toggle('is-idle', state.consoleState === 'idle');
   refs.floatingPanel.classList.toggle('is-draft-ready', isDraftReadyState());
   renderHeader();
+  renderTaskTypeSelector();
   renderModeSelector();
   renderStickyRuleTags();
   renderQuickPromptRow();
@@ -1842,7 +1958,7 @@ function resetConsoleToIdle(options = {}) {
   render();
   if (!options.silentFeedback) {
     setFeedback('已回到准备阶段', {
-      meta: '可重写主题、模式或本轮补充，再生成首轮 Draft',
+      meta: '可重写主题、任务类型、模式或本轮补充，再生成首轮 Draft。',
     });
   }
 }
@@ -2187,6 +2303,7 @@ async function prepareGeneratedRoundDraft(options = {}) {
       scaffoldOnly: true,
       sourceCount: scaffoldSourceCount,
       topic: state.topic,
+      taskTypeId: state.taskTypeId,
       summarizerName: state.summarizerProviderName,
       maxLengthPerSource,
     });
@@ -2369,6 +2486,7 @@ async function prepareAndSubmitAutoRound(options = {}) {
       paneIds,
       sources: roundSources,
       topic: state.topic,
+      taskTypeId: state.taskTypeId,
       summarizerName: state.summarizerProviderName,
       maxLengthPerSource,
     });
@@ -2893,7 +3011,7 @@ async function generateRoundOneDraft() {
   clearFlowErrorStates();
   render();
   setFeedback('正在生成首轮 Draft', {
-    meta: '系统正在合并主题、模式和本轮补充',
+    meta: '系统正在合并主题、任务类型、模式和本轮补充。',
   });
 
   state.draft = buildRoundOneDraft();
@@ -2902,7 +3020,7 @@ async function generateRoundOneDraft() {
   mirrorDraftToTargetPanes();
   focusPrimaryField();
   setFeedback('已生成首轮 Draft，可发送', {
-    meta: `将发送给 ${Math.max(getDraftPaneIds().length, 0)} 个参与 AI；发送前可继续修改`,
+    meta: `将发送给 ${Math.max(getDraftPaneIds().length, 0)} 个参与 AI；发送前可继续修改，并会保留当前任务类型语义。`,
   });
 }
 
@@ -3000,6 +3118,7 @@ async function submitCurrentDraft(options = {}) {
         sources: roundSources,
         baseDraft: state.draft,
         topic: state.topic,
+        taskTypeId: state.taskTypeId,
         summarizerName: state.summarizerProviderName,
         maxLengthPerSource,
       });

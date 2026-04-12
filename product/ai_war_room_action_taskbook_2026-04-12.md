@@ -15,6 +15,20 @@
 
 ---
 
+## 当前实施状态
+
+截至 2026-04-12，当前代码推进状态如下：
+
+- 阶段 A 已完成：任务类型 `explore / execute / review` 已贯通首轮 Draft、后续轮 prompt 和讨论控制台 UI。
+- 阶段 B 已完成：外层讨论强度表达已切到 `Quick / Standard / Deep`，内部继续复用 `fast-3 / standard-4 / deep-5`。
+- 阶段 C 已完成静态落地：界面标题、副标题、流程状态与 MCP 状态快照已显式携带目标结果物（`Decision Brief / Execution Plan / Review Memo`）。
+- 阶段 D 已完成静态落地：应用内主入口继续使用“分析问题 / 生成方案 / 检查结果”，帮助弹窗与 README 同步保留开发者映射表达。
+- 阶段 E 已完成静态落地：`update_discussion_flow` 已支持 `taskType`，`get_discussion_flow_state` 已返回任务类型与结果物目标。
+
+当前剩余工作重点不是再扩入口，而是做运行时验证和后续体验打磨。
+
+---
+
 ## 目标定义
 
 本阶段目标不是重做讨论系统，而是在现有讨论控制台之上，收束出一个更清晰的统一入口：

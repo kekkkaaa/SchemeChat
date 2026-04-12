@@ -64,10 +64,10 @@
       <section class="help-section">
         <div class="section-title">推荐用法</div>
         <p class="desc"><strong>默认主路</strong>：让 Codex / Claude Code 优先走讨论流程工具，不要把 <code class="ic">inject -&gt; submit -&gt; capture</code> 当成完整多轮编排主路。</p>
-        <p class="desc">推荐顺序是：先用 <code class="ic">get_discussion_flow_state</code> 读状态，再用 <code class="ic">update_discussion_flow</code> 改 topic / 本轮补充 / draft / runMode / modeId（3/4/5 轮），必要时先用 <code class="ic">open_temporary_chats</code> 切到临时对话，最后用 <code class="ic">trigger_discussion_action</code> 触发开始、发送、继续、下一步等动作。</p>
+        <p class="desc">推荐顺序是：先用 <code class="ic">get_discussion_flow_state</code> 读状态，先判断这次是“分析问题 / 生成方案 / 检查结果”哪一种，再用 <code class="ic">update_discussion_flow</code> 改 topic / taskType / 本轮补充 / draft / runMode / modeId。这里的 <code class="ic">taskType</code> 对应 <strong>explore / execute / review</strong>，<code class="ic">modeId</code> 仍然是 <code class="ic">fast-3</code> / <code class="ic">standard-4</code> / <code class="ic">deep-5</code>，分别对应界面里的 <strong>Quick / Standard / Deep</strong>。必要时先用 <code class="ic">open_temporary_chats</code> 切到临时对话，最后用 <code class="ic">trigger_discussion_action</code> 触发开始、发送、继续、下一步等动作。</p>
         <p class="desc">写操作工具默认关闭。如需 <code class="ic">update_discussion_flow</code>、<code class="ic">trigger_discussion_action</code> 等能力，请先在应用 <strong>Settings</strong> 中开启 <strong>MCP Write Tools</strong>。这个开关会持久保存，之后正常双击 exe 启动也会按该设置生效。</p>
-        <p class="desc"><strong>get_discussion_flow_state</strong> 用来读当前轮次、Draft、推进模式和下一步可执行动作。</p>
-        <p class="desc"><strong>update_discussion_flow</strong> 用来改 topic / 本轮补充 / draft / runMode / modeId，遵守和界面一致的可编辑规则。</p>
+        <p class="desc"><strong>get_discussion_flow_state</strong> 用来读当前任务类型、目标结果物、轮次、Draft、推进模式和下一步可执行动作。</p>
+        <p class="desc"><strong>update_discussion_flow</strong> 用来改 topic / taskType / 本轮补充 / draft / runMode / modeId，遵守和界面一致的可编辑规则；其中 <code class="ic">taskType</code> 对应 <code class="ic">explore</code> / <code class="ic">execute</code> / <code class="ic">review</code>，<code class="ic">modeId</code> 对应讨论强度 Quick / Standard / Deep。</p>
         <p class="desc"><strong>open_temporary_chats</strong> 用来让 ChatGPT / Gemini / Grok 先进入临时或私有对话，适合临时分析、随手提问或不想污染历史记录的场景。</p>
         <p class="desc"><strong>trigger_discussion_action</strong> 会复用 SchemeChat 现有的自动/手动讨论流程，由应用自己负责发送、等待、暂停、补抓和下一轮推进。</p>
         <p class="desc">长时间自动流程建议把 <code class="ic">waitForCompletion</code> 设为 <code class="ic">false</code>，然后继续用状态工具观察流程进度。</p>
@@ -92,11 +92,11 @@
           </div>
           <div class="tool read">
             <span class="tool-name">get_discussion_flow_state</span>
-            <span class="tool-desc">主路：查看讨论流程状态、当前 Draft 和下一步动作</span>
+            <span class="tool-desc">主路：查看任务类型、目标结果物、当前 Draft 和下一步动作</span>
           </div>
           <div class="tool write">
             <span class="tool-name">update_discussion_flow</span>
-            <span class="tool-desc">主路：更新 topic、本轮补充、draft、runMode 或轮数模式</span>
+            <span class="tool-desc">主路：更新 topic、taskType、本轮补充、draft、runMode 或讨论强度（Quick / Standard / Deep）</span>
           </div>
           <div class="tool write">
             <span class="tool-name">open_temporary_chats</span>

@@ -1136,6 +1136,7 @@ app.on('ready', async () => {
 
       const promptOptions = {
         topic: payload?.topic || '',
+        taskTypeId: payload?.taskTypeId || '',
         summarizerName: payload?.summarizerName || getPaneLabel(paneEntry),
         maxLengthPerSource: payload?.maxLengthPerSource,
       };
@@ -1192,6 +1193,7 @@ app.on('ready', async () => {
 
     const promptOptions = {
       topic: payload?.topic || '',
+      taskTypeId: payload?.taskTypeId || '',
       summarizerName: payload?.summarizerName || '',
       sourceCount: Number.isFinite(payload?.sourceCount) ? payload.sourceCount : sourceEntries.length,
       maxLengthPerSource: payload?.maxLengthPerSource,

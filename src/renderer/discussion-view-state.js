@@ -80,6 +80,24 @@ function deriveInputState(config = {}) {
   };
 }
 
+function getArtifactStageLabel(roundType, artifactLabel) {
+  return roundType === '最终总结' && artifactLabel
+    ? artifactLabel
+    : roundType;
+}
+
+function getArtifactTitleText(fallbackText, topicSummary, roundType, artifactLabel, suffix) {
+  if (topicSummary) {
+    return topicSummary;
+  }
+
+  if (roundType === '最终总结' && artifactLabel) {
+    return `${artifactLabel}${suffix}`;
+  }
+
+  return fallbackText;
+}
+
 function deriveHeaderState(config = {}) {
   const modeLabel = String(config.modeLabel || '');
   const modeDescription = String(config.modeDescription || '');
@@ -94,6 +112,9 @@ function deriveHeaderState(config = {}) {
   const runMode = String(config.runMode || 'manual');
   const summarizerLabel = String(config.summarizerLabel || '总结者');
   const hasResolvedSummarizer = Boolean(config.hasResolvedSummarizer);
+  const taskTypeLabel = String(config.taskTypeLabel || '');
+  const artifactLabel = String(config.artifactLabel || '');
+  const artifactGoal = String(config.artifactGoal || '');
   const feedbackMessage = String(config.feedbackMessage || '');
   const autoPauseReason = String(config.autoPauseReason || '');
   const roundGoalLabel = String(config.roundGoalLabel || '');
@@ -101,6 +122,11 @@ function deriveHeaderState(config = {}) {
   const sendButtonLabel = String(config.sendButtonLabel || '');
   const draftSent = Boolean(config.draftSent);
   const draftNeedsRefresh = Boolean(config.draftNeedsRefresh);
+  const stageLabel = getArtifactStageLabel(roundType, artifactLabel);
+  const artifactTargetText = artifactLabel ? `目标结果物：${artifactLabel}` : '目标结果物待定';
+  const idleGoalText = artifactGoal
+    ? `目标：先明确讨论主题，再生成首轮 Draft，最终产出 ${artifactLabel}。${artifactGoal}`
+    : '目标：先明确讨论主题，再生成首轮 Draft。';
 
   const states = {
     isPreparing: Boolean(config.isPreparing),
@@ -122,7 +148,9 @@ function deriveHeaderState(config = {}) {
     modeDescriptionTitle: modeDescription,
     modeFlowHintText: modeDescription,
     modeFlowHintTitle: modeDescription,
-    workspaceEyebrowText: '讨论工作台',
+    workspaceEyebrowText: taskTypeLabel && artifactLabel
+      ? `AI War Room · ${taskTypeLabel} · ${artifactLabel}`
+      : (artifactLabel ? `AI War Room · ${artifactLabel}` : 'AI War Room'),
     launcherRunModeText: runModeLabel,
     panelRunModeText: runModeLabel,
   };
@@ -130,12 +158,12 @@ function deriveHeaderState(config = {}) {
   if (states.isPreparing) {
     return {
       ...base,
-      stageBadgeText: roundType,
-      dockStageBadgeText: roundType,
+      stageBadgeText: stageLabel,
+      dockStageBadgeText: stageLabel,
       roundBadgeText: `第 ${roundNumber || 1} / ${totalRounds} 轮`,
-      roundGoalText: `${roundGoalLabel} 当前正在生成本轮 Draft。`,
-      workspaceTitleText: topicSummary || `${roundType}准备中`,
-      workspaceSubtitleText: `第 ${roundNumber || 1} / ${totalRounds} 轮 · ${roundType} · 正在生成 Draft`,
+      roundGoalText: `${roundGoalLabel} 当前正在生成本轮 Draft。${artifactLabel ? ` ${artifactTargetText}` : ''}`.trim(),
+      workspaceTitleText: getArtifactTitleText(`${roundType}准备中`, topicSummary, roundType, artifactLabel, ' 准备中'),
+      workspaceSubtitleText: `第 ${roundNumber || 1} / ${totalRounds} 轮 · ${stageLabel} · 正在生成 Draft`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-running',
       launcherPrimaryText: '生成中',
@@ -153,12 +181,12 @@ function deriveHeaderState(config = {}) {
   if (states.isDispatching) {
     return {
       ...base,
-      stageBadgeText: roundType,
-      dockStageBadgeText: roundType,
+      stageBadgeText: stageLabel,
+      dockStageBadgeText: stageLabel,
       roundBadgeText: `第 ${roundNumber} / ${totalRounds} 轮`,
-      roundGoalText: `${roundGoalLabel} 当前正在发送本轮 Draft。`,
-      workspaceTitleText: topicSummary || `${roundType}发送中`,
-      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${roundType} · 正在发送本轮`,
+      roundGoalText: `${roundGoalLabel} 当前正在发送本轮 Draft。${artifactLabel ? ` ${artifactTargetText}` : ''}`.trim(),
+      workspaceTitleText: getArtifactTitleText(`${roundType}发送中`, topicSummary, roundType, artifactLabel, ' 发送中'),
+      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${stageLabel} · 正在发送本轮`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-running',
       launcherPrimaryText: '发送中',
@@ -176,12 +204,12 @@ function deriveHeaderState(config = {}) {
   if (states.isWaiting) {
     return {
       ...base,
-      stageBadgeText: roundType,
-      dockStageBadgeText: roundType,
+      stageBadgeText: stageLabel,
+      dockStageBadgeText: stageLabel,
       roundBadgeText: `第 ${roundNumber} / ${totalRounds} 轮`,
-      roundGoalText: `${roundGoalLabel} 当前正在等待本轮回复完成。`,
-      workspaceTitleText: topicSummary || `${roundType}进行中`,
-      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${roundType} · ${runMode === 'auto' ? '自动等待中' : '等待本轮完成'}`,
+      roundGoalText: `${roundGoalLabel} 当前正在等待本轮回复完成。${artifactLabel ? ` ${artifactTargetText}` : ''}`.trim(),
+      workspaceTitleText: getArtifactTitleText(`${roundType}进行中`, topicSummary, roundType, artifactLabel, ' 进行中'),
+      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${stageLabel} · ${runMode === 'auto' ? '自动等待中' : '等待本轮完成'}`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-running',
       launcherPrimaryText: '等待本轮完成',
@@ -202,9 +230,9 @@ function deriveHeaderState(config = {}) {
       stageBadgeText: '本轮完成',
       dockStageBadgeText: '本轮完成',
       roundBadgeText: `第 ${roundNumber} / ${totalRounds} 轮`,
-      roundGoalText: `${roundType}已完成，可查看结果并决定下一步。`,
-      workspaceTitleText: topicSummary || `${roundType}已完成`,
-      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${roundType} · 本轮结果已就绪`,
+      roundGoalText: `${stageLabel}已完成，可查看结果并决定下一步。${artifactLabel ? ` ${artifactTargetText}` : ''}`.trim(),
+      workspaceTitleText: getArtifactTitleText(`${roundType}已完成`, topicSummary, roundType, artifactLabel, ' 已完成'),
+      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${stageLabel} · 本轮结果已就绪`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-sent',
       launcherPrimaryText: roundReviewPrimaryLabel,
@@ -226,10 +254,10 @@ function deriveHeaderState(config = {}) {
       dockStageBadgeText: '选择总结者',
       roundBadgeText: `第 ${roundNumber} / ${totalRounds} 轮`,
       roundGoalText: hasResolvedSummarizer
-        ? `当前推荐 ${summarizerLabel} 输出最终总结，确认后进入最终轮。`
+        ? `当前推荐 ${summarizerLabel} 输出 ${artifactLabel || '最终总结'}，确认后进入最终轮。`
         : '当前未形成明确总结者推荐，请先手动指定后再进入最终轮。',
       workspaceTitleText: topicSummary || '确认总结者',
-      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · 最终总结前确认 · ${summarizerLabel}`,
+      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${artifactLabel || '最终总结'} 前确认 · ${summarizerLabel}`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-editable',
       launcherPrimaryText: '确认总结者',
@@ -319,9 +347,9 @@ function deriveHeaderState(config = {}) {
       stageBadgeText: '讨论完成',
       dockStageBadgeText: '讨论完成',
       roundBadgeText: `第 ${roundNumber} / ${totalRounds} 轮`,
-      roundGoalText: `整场讨论已完成，最终方案由 ${summarizerLabel} 输出。`,
-      workspaceTitleText: topicSummary || '最终方案已生成',
-      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · 最终总结 · ${summarizerLabel} 已完成输出`,
+      roundGoalText: `整场讨论已完成，${artifactLabel || '最终方案'} 由 ${summarizerLabel} 输出。`,
+      workspaceTitleText: topicSummary || `${artifactLabel || '最终方案'} 已生成`,
+      workspaceSubtitleText: `第 ${roundNumber} / ${totalRounds} 轮 · ${artifactLabel || '最终总结'} · ${summarizerLabel} 已完成输出`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: 'status-pill is-sent',
       launcherPrimaryText: '开始新讨论',
@@ -339,12 +367,14 @@ function deriveHeaderState(config = {}) {
   if (states.isDraftReady) {
     return {
       ...base,
-      stageBadgeText: roundType,
-      dockStageBadgeText: roundType,
+      stageBadgeText: stageLabel,
+      dockStageBadgeText: stageLabel,
       roundBadgeText: `第 ${roundNumber || 1} / ${totalRounds} 轮`,
-      roundGoalText: roundGoalLabel,
-      workspaceTitleText: topicSummary || (draftSent ? `${roundType} Draft 已发送` : `${roundType} Draft 已就绪`),
-      workspaceSubtitleText: `第 ${roundNumber || 1} / ${totalRounds} 轮 · ${roundType} · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`,
+      roundGoalText: `${roundGoalLabel}${artifactLabel ? ` ${artifactTargetText}` : ''}`.trim(),
+      workspaceTitleText: topicSummary || (draftSent
+        ? getArtifactTitleText(`${roundType} Draft 已发送`, topicSummary, roundType, artifactLabel, ' Draft 已发送')
+        : getArtifactTitleText(`${roundType} Draft 已就绪`, topicSummary, roundType, artifactLabel, ' Draft 已就绪')),
+      workspaceSubtitleText: `第 ${roundNumber || 1} / ${totalRounds} 轮 · ${stageLabel} · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`,
       draftStatusBadgeText: stateLabel,
       draftStatusBadgeClassName: `status-pill${draftNeedsRefresh ? ' is-stale' : (draftSent ? ' is-sent' : ' is-editable')}`,
       launcherPrimaryText: draftSent ? '再次发送' : sendButtonLabel,
@@ -364,7 +394,7 @@ function deriveHeaderState(config = {}) {
     stageBadgeText: '准备开始',
     dockStageBadgeText: '准备开始',
     roundBadgeText: `第 0 / ${totalRounds} 轮`,
-    roundGoalText: '目标：先明确讨论主题，再生成首轮 Draft。',
+    roundGoalText: idleGoalText,
     workspaceTitleText: '准备讨论主题',
     workspaceSubtitleText: `第 0 / ${totalRounds} 轮 · 准备开始 · ${paneCount > 0 ? `${paneCount} 个参与 AI` : '等待参与 AI'}`,
     draftStatusBadgeText: '待生成',

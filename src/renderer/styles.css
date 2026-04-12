@@ -637,15 +637,28 @@ textarea {
 
 .mode-selector-stack {
   min-width: 0;
-  max-width: 380px;
+  max-width: 430px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
 }
 
+.selector-block {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
 .mode-selector-stack .segment-control {
   justify-content: flex-end;
+}
+
+.selector-block .field-label {
+  width: 100%;
+  text-align: right;
 }
 
 .mode-flow-hint {
@@ -1164,8 +1177,16 @@ textarea {
     align-items: stretch;
   }
 
+  .selector-block {
+    align-items: stretch;
+  }
+
   .mode-selector-stack .segment-control {
     justify-content: flex-start;
+  }
+
+  .selector-block .field-label {
+    text-align: left;
   }
 
   .mode-flow-hint {

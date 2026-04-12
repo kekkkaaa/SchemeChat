@@ -13,7 +13,8 @@
         <div class="launcher-meta-row">
           <div class="badge-row">
             <span id="dockStageBadge" class="badge badge-stage">准备开始</span>
-            <span id="dockModeBadge" class="badge">4 轮标准</span>
+            <span id="dockTaskBadge" class="badge badge-subtle">分析问题</span>
+            <span id="dockModeBadge" class="badge">Standard</span>
             <span id="dockStateBadge" class="badge badge-subtle">待生成</span>
           </div>
           <label id="dockInputLabel" class="field-label launcher-inline-label" for="dockInput">讨论主题</label>
@@ -47,7 +48,7 @@
     <section id="floatingPanel" class="floating-panel hidden">
       <div id="panelDragHandle" class="panel-titlebar">
         <div class="title-copy">
-          <p id="workspaceEyebrow" class="workspace-eyebrow">讨论工作台</p>
+          <p id="workspaceEyebrow" class="workspace-eyebrow">AI War Room · 分析问题 · Decision Brief</p>
           <h1 id="workspaceTitle" class="workspace-title">准备讨论主题</h1>
           <p id="workspaceSubtitle" class="workspace-subtitle">第 0 / 4 轮 · 准备开始</p>
           <p id="roundGoalText" class="workspace-goal">目标：先明确讨论主题，再生成首轮 Draft。</p>
@@ -63,8 +64,9 @@
       <div class="panel-statusline">
         <div class="badge-row">
           <span id="stageBadge" class="badge badge-stage">准备开始</span>
+          <span id="taskBadge" class="badge badge-subtle">分析问题</span>
           <span id="roundBadge" class="badge">第 0 / 4 轮</span>
-          <span id="modeBadge" class="badge">4 轮标准</span>
+          <span id="modeBadge" class="badge">Standard</span>
         </div>
         <span id="speakerScopeText" class="field-hint">发言：等待参与 AI</span>
       </div>
@@ -78,8 +80,16 @@
                 <p class="field-hint">明确本轮问题</p>
               </div>
               <div class="mode-selector-stack">
-                <div id="modeSelector" class="segment-control"></div>
-                <p id="modeFlowHint" class="field-hint mode-flow-hint">独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结</p>
+                <div class="selector-block">
+                  <span class="field-label">任务类型</span>
+                  <div id="taskTypeSelector" class="segment-control"></div>
+                  <p id="taskTypeDescription" class="field-hint mode-flow-hint">Decision Brief · 收束当前最稳判断、关键分歧与主要风险。</p>
+                </div>
+                <div class="selector-block">
+                  <span class="field-label">讨论强度</span>
+                  <div id="modeSelector" class="segment-control"></div>
+                  <p id="modeFlowHint" class="field-hint mode-flow-hint">独立分析 -> 交叉讨论 -> 分歧压缩 -> 最终总结</p>
+                </div>
               </div>
             </div>
 
@@ -124,9 +134,9 @@
             <summary class="disclosure-summary support-primary-summary">
               <div class="support-summary-copy">
                 <span class="field-label">本轮指令</span>
-                <span id="modeDescription" class="field-hint">默认推荐 4 轮标准模式</span>
+                <span id="modeDescription" class="field-hint">默认推荐 Standard · 4 轮平衡推进</span>
               </div>
-              <span id="supportSummaryMeta" class="summary-meta">5 条规则 · 无补充</span>
+                <span id="supportSummaryMeta" class="summary-meta">分析问题 · Decision Brief · 5 条规则 · 无补充</span>
             </summary>
 
             <div class="support-body">

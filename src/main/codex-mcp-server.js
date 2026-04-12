@@ -8,6 +8,7 @@ const z = require('zod/v4');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3769;
 const WRITE_TOOLS_ENV_NAME = 'SCHEMECHAT_MCP_ENABLE_WRITE_TOOLS';
+const TASK_TYPE_IDS = ['explore', 'execute', 'review'];
 
 function createTextToolResult(label, payload, isError = false) {
   return {
@@ -104,7 +105,7 @@ function createSchemeChatMcpServer(options = {}) {
     if (typeof options.getDiscussionFlowState === 'function') {
       server.registerTool('get_discussion_flow_state', {
         title: 'Get Discussion Flow State',
-        description: 'Recommended main-path tool: inspect the current discussion controller state, including mode, round, draft, and next available actions.',
+        description: 'Recommended main-path tool: inspect the current discussion controller state, including task type, target artifact, mode, round, draft, and next available actions.',
         inputSchema: {},
       }, async () => {
         const result = await options.getDiscussionFlowState();
@@ -116,18 +117,22 @@ function createSchemeChatMcpServer(options = {}) {
       if (typeof options.updateDiscussionFlow === 'function') {
         server.registerTool('update_discussion_flow', {
           title: 'Update Discussion Flow',
-          description: 'Recommended main-path tool: update discussion controller inputs such as topic, round note, draft, or run mode. Respects the same editability rules as the UI.',
+          description: 'Recommended main-path tool: update discussion controller inputs such as topic, task type, round note, draft, or run mode. Respects the same editability rules as the UI.',
           inputSchema: {
             topic: z.string().optional().describe('Optional discussion topic. Pass an empty string to clear it.'),
+            taskType: z.enum(TASK_TYPE_IDS).optional().describe('Optional task type. explore = 分析问题 / execute = 生成方案 / review = 检查结果.'),
             roundNote: z.string().optional().describe('Optional per-round note or temporary instruction. Pass an empty string to clear it.'),
             draft: z.string().optional().describe('Optional current draft text. Pass an empty string to clear it.'),
             runMode: z.enum(['manual', 'auto']).optional().describe('Optional discussion run mode to apply before the next action.'),
-            modeId: z.enum(['fast-3', 'standard-4', 'deep-5']).optional().describe('Optional discussion round preset: 3 rounds, 4 rounds, or 5 rounds.'),
+            modeId: z.enum(['fast-3', 'standard-4', 'deep-5']).optional().describe('Optional discussion intensity preset. fast-3 = Quick (3 rounds), standard-4 = Standard (4 rounds), deep-5 = Deep (5 rounds).'),
           },
-        }, async ({ topic, roundNote, draft, runMode, modeId }) => {
+        }, async ({ topic, taskType, roundNote, draft, runMode, modeId }) => {
           const patch = {};
           if (topic !== undefined) {
             patch.topic = topic;
+          }
+          if (taskType !== undefined) {
+            patch.taskType = taskType;
           }
           if (roundNote !== undefined) {
             patch.roundNote = roundNote;
