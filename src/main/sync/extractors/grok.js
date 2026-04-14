@@ -60,7 +60,8 @@ module.exports = createDomExtractor({
   },
   stability: {
     pollIntervalMs: 900,
-    stablePassesRequired: 3,
-    timeoutMs: 18000,
+    stablePassesRequired: 4,
+    minIdleStableMs: 2800,
+    timeoutMs: 22000,
   },
 });

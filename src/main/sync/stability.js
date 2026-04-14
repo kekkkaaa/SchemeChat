@@ -1,4 +1,13 @@
 const crypto = require('crypto');
+const {
+  buildCompletionError,
+  evaluateCompletionObservation,
+  isTerminalFailureCompletionState,
+  mapCompletionReasonToLegacyStatusReason,
+  mapCompletionStateToLegacyStatus,
+  resolveCompletionPolicyOptions,
+  shouldFinalizeCompletion,
+} = require('../discussion/completion-policy');
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -13,55 +22,40 @@ function fingerprintText(text) {
     .digest('hex');
 }
 
-function hasUsableReply(result) {
-  if (!result) {
-    return false;
-  }
+function resolveCapturePolicyOptions(options = {}) {
+  const busyWait = options?.busyWait || {};
+  const stability = options?.stability || {};
 
-  const text = String(result.text || '').trim();
-  if (!text) {
-    return false;
-  }
-
-  if (typeof result.hasUsableReply === 'boolean') {
-    return result.hasUsableReply;
-  }
-
-  return true;
+  return resolveCompletionPolicyOptions({
+    pollIntervalMs: stability.pollIntervalMs || busyWait.pollIntervalMs || 700,
+    stablePassesRequired: stability.stablePassesRequired || 2,
+    minIdleStableMs: stability.minIdleStableMs,
+    stallMs: options?.stallMs,
+    requireStableCompletion: true,
+    allowSnapshotCompletion: false,
+  });
 }
 
-function buildWeakReplyError(result) {
-  const qualityReason = result?.diagnostics?.qualityReason || '';
+function buildStableCaptureResult(result = {}, evaluation = {}, override = {}) {
+  const normalizedResult = {
+    ...result,
+    ...evaluation,
+  };
+  const completionState = override.completionState || evaluation?.completionState;
+  const completionReason = override.completionReason || evaluation?.completionReason;
+  const ok = override.ok !== undefined
+    ? Boolean(override.ok)
+    : !isTerminalFailureCompletionState(completionState);
 
-  switch (qualityReason) {
-    case 'matched-weak-pattern':
-      return 'Latest reply still looks like provider UI text, not a stable assistant reply.';
-    case 'short-root-fallback':
-      return 'Latest reply is still too short and fallback-like to trust yet.';
-    case 'short-low-structure':
-      return 'Latest reply is still too short and weakly structured to trust yet.';
-    case 'low-confidence':
-      return 'Latest reply is still too low-confidence to trust yet.';
-    default:
-      return 'Latest reply is not stable enough to trust yet.';
-  }
-}
-
-function buildPendingCaptureError(result) {
-  if (!result) {
-    return 'Latest reply is not stable enough to trust yet.';
-  }
-
-  const text = String(result.text || '').trim();
-  if (!text) {
-    return result.error || 'No latest reply was found yet.';
-  }
-
-  if (!hasUsableReply(result)) {
-    return result.error || buildWeakReplyError(result);
-  }
-
-  return result.error || 'Timed out while waiting for the latest reply to stabilize.';
+  return {
+    ...normalizedResult,
+    ok,
+    error: ok ? null : (override.error || buildCompletionError(normalizedResult, { timedOut: override.timedOut })),
+    status: override.status || mapCompletionStateToLegacyStatus(completionState, normalizedResult),
+    statusReason: override.statusReason || mapCompletionReasonToLegacyStatusReason(completionState, normalizedResult),
+    completionState,
+    completionReason,
+  };
 }
 
 async function waitUntilNotBusy(inspectFn, options = {}) {
@@ -95,62 +89,40 @@ async function waitUntilNotBusy(inspectFn, options = {}) {
 
 async function captureUntilStable(inspectFn, options = {}, initialResult = null) {
   const timeoutMs = options.timeoutMs || 12000;
-  const pollIntervalMs = options.pollIntervalMs || 700;
-  const stablePassesRequired = options.stablePassesRequired || 2;
+  const policy = resolveCapturePolicyOptions({
+    stability: options,
+  });
+  const pollIntervalMs = policy.pollIntervalMs;
   const startedAt = Date.now();
 
   let currentResult = initialResult || await inspectFn();
-  let lastObservedResult = currentResult;
-  let lastUsableResult = null;
-  let lastUsableFingerprint = null;
-  let stablePasses = 0;
+  let tracker = {};
+  let lastEvaluation = null;
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (!currentResult.ok) {
-      return currentResult;
+    const evaluation = evaluateCompletionObservation(currentResult, tracker, {
+      ...policy,
+      now: Date.now(),
+    });
+    tracker = evaluation.nextTracker;
+    lastEvaluation = evaluation;
+
+    if (shouldFinalizeCompletion(evaluation)) {
+      return buildStableCaptureResult(currentResult, evaluation, { ok: true });
     }
 
-    lastObservedResult = currentResult;
-
-    if (!currentResult.busy) {
-      const currentText = String(currentResult.text || '').trim();
-      if (currentText && hasUsableReply(currentResult)) {
-        const currentFingerprint = currentResult.fingerprint || fingerprintText(currentText);
-        if (currentFingerprint === lastUsableFingerprint) {
-          stablePasses += 1;
-        } else {
-          lastUsableResult = currentResult;
-          lastUsableFingerprint = currentFingerprint;
-          stablePasses = 1;
-        }
-
-        if (stablePasses >= stablePassesRequired) {
-          return {
-            ...currentResult,
-            fingerprint: currentFingerprint,
-          };
-        }
-      } else {
-        lastUsableResult = null;
-        lastUsableFingerprint = null;
-        stablePasses = 0;
-      }
-    } else {
-      lastUsableResult = null;
-      lastUsableFingerprint = null;
-      stablePasses = 0;
+    if (isTerminalFailureCompletionState(evaluation.completionState)) {
+      return buildStableCaptureResult(currentResult, evaluation, { ok: false });
     }
 
     await delay(pollIntervalMs);
     currentResult = await inspectFn();
   }
 
-  const fallbackResult = lastObservedResult || lastUsableResult || currentResult;
-  return {
-    ...fallbackResult,
+  return buildStableCaptureResult(currentResult || initialResult || {}, lastEvaluation || {}, {
     ok: false,
-    error: buildPendingCaptureError(fallbackResult),
-  };
+    timedOut: true,
+  });
 }
 
 async function captureStableReply(inspectFn, options = {}) {

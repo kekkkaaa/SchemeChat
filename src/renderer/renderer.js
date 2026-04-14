@@ -1,5 +1,9 @@
 const { ipcRenderer } = require('electron');
 const throttle = require('../utils/throttle');
+const {
+  createFrozenRoundEntry,
+  restoreRoundResults,
+} = require('../main/discussion/material-store');
 const { initThemeSync } = require('./theme-sync');
 const {
   AUTO_WAIT_POLL_INTERVAL_MS,
@@ -59,6 +63,7 @@ const state = {
   draftNeedsRefresh: false,
   draftPaneIds: [],
   draftPromptType: '',
+  currentPromptPlan: null,
   sourcesExpanded: false,
   panes: [],
   providerTracks: {},
@@ -242,6 +247,7 @@ function setDraftPaneIds(paneIds = []) {
 function clearDraftContext() {
   state.draftPaneIds = [];
   state.draftPromptType = '';
+  state.currentPromptPlan = null;
 }
 
 function getRoundTypeLabel(roundNumber = state.currentRoundNumber, modeId = state.modeId) {
@@ -1228,10 +1234,10 @@ function restoreLatestCompletedRoundContext() {
   state.currentRoundNumber = latestRound.roundNumber || 0;
   state.currentRoundType = latestRound.roundType || getRoundTypeLabel(state.currentRoundNumber);
   state.expectedPaneIds = getUniquePaneIds([
-    ...(Array.isArray(latestRound.results) ? latestRound.results.map((result) => result?.paneId) : []),
+    ...restoreRoundResults(latestRound).map((result) => result?.paneId),
     ...(Array.isArray(latestRound.skippedPaneIds) ? latestRound.skippedPaneIds : []),
   ]);
-  state.lastRoundResults = Array.isArray(latestRound.results) ? latestRound.results : [];
+  state.lastRoundResults = restoreRoundResults(latestRound);
   state.draft = '';
   state.draftSent = false;
   state.draftNeedsRefresh = false;
@@ -1336,12 +1342,18 @@ function normalizeCapturedRoundResults(results = []) {
       const hasUsableReply = result?.hasUsableReply !== undefined
         ? Boolean(result.hasUsableReply)
         : Boolean(String(result?.latestReplyText || '').trim());
+      const hasCompletedReply = result?.completionState
+        ? result.completionState === 'completed'
+        : hasUsableReply;
 
-      return result?.ok && hasUsableReply && String(result?.latestReplyText || '').trim();
+      return result?.ok && hasUsableReply && hasCompletedReply && String(result?.latestReplyText || '').trim();
     })
     .map((result) => ({
       ...result,
+      completionState: result?.completionState || 'completed',
+      completionReason: result?.completionReason || 'stable-reply',
       status: 'completed',
+      statusReason: result?.statusReason || result?.completionReason || 'stable-reply',
     }));
 }
 
@@ -1351,15 +1363,17 @@ function recordCompletedRound(results = [], options = {}) {
     : [];
 
   state.lastRoundResults = results;
+  state.currentPromptPlan = null;
+  const frozenRoundEntry = createFrozenRoundEntry({
+    roundNumber: state.currentRoundNumber,
+    roundType: state.currentRoundType,
+    results,
+    skippedPaneIds,
+    summarizerPaneId: options.summarizerPaneId || state.summarizerPaneId || '',
+  });
   state.roundHistory = [
     ...state.roundHistory.filter((entry) => entry.roundNumber !== state.currentRoundNumber),
-    {
-      roundNumber: state.currentRoundNumber,
-      roundType: state.currentRoundType,
-      results,
-      skippedPaneIds,
-      summarizerPaneId: options.summarizerPaneId || state.summarizerPaneId || '',
-    },
+    frozenRoundEntry,
   ];
 }
 
@@ -1378,6 +1392,75 @@ function getAutoRoundSources(promptType) {
 
 function getAutoRoundSourceMaxLength(promptType) {
   return getAutoRoundSourceMaxLengthFromCore(promptType);
+}
+
+function getPromptPlanSourceSnapshot(promptPlan = state.currentPromptPlan) {
+  return Array.isArray(promptPlan?.sourceSnapshot)
+    ? promptPlan.sourceSnapshot
+    : [];
+}
+
+function hasMatchingPromptPlanTargets(promptPlan, paneIds = []) {
+  const normalizedPaneIds = getUniquePaneIds(paneIds);
+  const targetPaneIds = Array.isArray(promptPlan?.targetPaneIds)
+    ? [...new Set(promptPlan.targetPaneIds.map((paneId) => String(paneId || '').trim()).filter(Boolean))]
+    : [];
+  if (targetPaneIds.length !== normalizedPaneIds.length) {
+    return false;
+  }
+
+  return normalizedPaneIds.every((paneId) => targetPaneIds.includes(paneId));
+}
+
+async function buildGeneratedPromptPlan(options = {}) {
+  const promptType = String(options.promptType || state.draftPromptType || '').trim();
+  const paneIds = getUniquePaneIds(options.paneIds);
+  const maxLengthPerSource = options.maxLengthPerSource !== undefined
+    ? options.maxLengthPerSource
+    : getAutoRoundSourceMaxLength(promptType);
+
+  return ipcRenderer.invoke('build-generated-round-plan', {
+    roundNumber: Number.isFinite(options.roundNumber)
+      ? options.roundNumber
+      : state.currentRoundNumber,
+    promptType,
+    paneIds,
+    sources: Array.isArray(options.sources) ? options.sources : [],
+    baseDraft: options.baseDraft,
+    useDraftScaffold: Boolean(options.useDraftScaffold),
+    topic: state.topic,
+    taskTypeId: state.taskTypeId,
+    summarizerName: state.summarizerProviderName,
+    maxLengthPerSource,
+  });
+}
+
+async function rebuildCurrentGeneratedPromptPlan(options = {}) {
+  const promptType = String(options.promptType || state.draftPromptType || '').trim();
+  const paneIds = getUniquePaneIds(options.paneIds);
+  const sourceSnapshot = Array.isArray(options.sources)
+    ? options.sources
+    : getPromptPlanSourceSnapshot();
+
+  if (!promptType || paneIds.length === 0 || sourceSnapshot.length === 0) {
+    return {
+      ok: false,
+      message: '当前发送计划缺少冻结材料，请重新生成本轮 Draft。',
+      promptPlan: null,
+    };
+  }
+
+  return buildGeneratedPromptPlan({
+    roundNumber: Number.isFinite(options.roundNumber)
+      ? options.roundNumber
+      : state.currentRoundNumber,
+    promptType,
+    paneIds,
+    sources: sourceSnapshot,
+    baseDraft: options.baseDraft !== undefined ? options.baseDraft : state.draft,
+    useDraftScaffold: false,
+    maxLengthPerSource: options.maxLengthPerSource,
+  });
 }
 
 function getAutoRoundFeedback(roundNumber, promptType, paneIds) {
@@ -1505,7 +1588,6 @@ async function prepareGeneratedRoundDraft(options = {}) {
     ? autoRoundSources
     : [];
   const maxLengthPerSource = options.maxLengthPerSource || getAutoRoundSourceMaxLength(promptType);
-  const scaffoldSourceCount = Math.max(0, roundSources.length - 1);
 
   if (paneIds.length === 0) {
     enterGlobalErrorState(`第 ${options.roundNumber} 轮缺少可发言的目标面板。`, {
@@ -1537,19 +1619,18 @@ async function prepareGeneratedRoundDraft(options = {}) {
     meta: '系统正在根据上一轮结果装配本轮草稿。',
   });
 
-  let draftResult;
+  let draftPlanResult;
   try {
-    draftResult = await ipcRenderer.invoke('build-generated-round-draft', {
+    draftPlanResult = await buildGeneratedPromptPlan({
+      roundNumber: options.roundNumber,
       promptType,
-      scaffoldOnly: true,
-      sourceCount: scaffoldSourceCount,
-      topic: state.topic,
-      taskTypeId: state.taskTypeId,
-      summarizerName: state.summarizerProviderName,
+      paneIds,
+      sources: roundSources,
+      useDraftScaffold: true,
       maxLengthPerSource,
     });
   } catch (error) {
-    console.error('Failed to build generated round draft:', error);
+    console.error('Failed to build generated round prompt plan:', error);
     enterGlobalErrorState(`第 ${options.roundNumber} 轮 Draft 生成失败。`, {
       meta: error?.message || '请检查当前页面状态后再试。',
       resumeAction: options.resumeAction || 'prepare-next-round',
@@ -1557,15 +1638,23 @@ async function prepareGeneratedRoundDraft(options = {}) {
     return;
   }
 
-  if (!draftResult?.ok || !String(draftResult?.prompt || '').trim()) {
-    enterGlobalErrorState(draftResult?.message || `第 ${options.roundNumber} 轮 Draft 生成失败。`, {
+  const promptPlan = draftPlanResult?.promptPlan;
+  const draftDisplayText = String(
+    promptPlan?.draftDisplayText
+      || promptPlan?.baseDraftText
+      || draftPlanResult?.baseDraftText
+      || ''
+  ).trim();
+  if (!draftPlanResult?.ok || !promptPlan || !draftDisplayText) {
+    enterGlobalErrorState(draftPlanResult?.message || `第 ${options.roundNumber} 轮 Draft 生成失败。`, {
       meta: '当前无法生成可发送的 Draft。',
       resumeAction: options.resumeAction || 'prepare-next-round',
     });
     return;
   }
 
-  state.draft = draftResult.prompt;
+  state.currentPromptPlan = promptPlan;
+  state.draft = draftDisplayText;
   state.consoleState = 'draft-ready';
   render();
   mirrorDraftToTargetPanes();
@@ -1720,19 +1809,18 @@ async function prepareAndSubmitAutoRound(options = {}) {
     return;
   }
 
-  let prepareResult;
+  let planResult;
   try {
-    prepareResult = await ipcRenderer.invoke('prepare-generated-round', {
+    planResult = await buildGeneratedPromptPlan({
+      roundNumber: options.roundNumber,
       promptType: options.promptType,
       paneIds,
       sources: roundSources,
-      topic: state.topic,
-      taskTypeId: state.taskTypeId,
-      summarizerName: state.summarizerProviderName,
+      useDraftScaffold: false,
       maxLengthPerSource,
     });
   } catch (error) {
-    console.error('Failed to prepare generated round:', error);
+    console.error('Failed to build generated round prompt plan:', error);
     await pauseAutoRun(`自动准备第 ${options.roundNumber} 轮失败。`, {
       meta: error?.message || '请检查当前 AI 页面是否仍可写入输入框。',
       resumeAction: 'advance-next-round',
@@ -1740,15 +1828,17 @@ async function prepareAndSubmitAutoRound(options = {}) {
     return;
   }
 
-  if (!prepareResult?.ok) {
-    await pauseAutoRun(prepareResult?.message || `自动准备第 ${options.roundNumber} 轮失败。`, {
+  const promptPlan = planResult?.promptPlan;
+  if (!planResult?.ok || !promptPlan) {
+    await pauseAutoRun(planResult?.message || `自动准备第 ${options.roundNumber} 轮失败。`, {
       meta: '你可以先手动检查输入框状态，或改为手动接管。',
       resumeAction: 'advance-next-round',
     });
     return;
   }
 
-  state.draft = prepareResult.previewPrompt || '';
+  state.currentPromptPlan = promptPlan;
+  state.draft = promptPlan.previewPrompt || planResult.previewPrompt || '';
   state.draftSent = true;
   state.draftNeedsRefresh = false;
   state.consoleState = 'round-dispatching';
@@ -1757,6 +1847,14 @@ async function prepareAndSubmitAutoRound(options = {}) {
 
   let submitResult;
   try {
+    const injectResult = await ipcRenderer.invoke('inject-prompt-plan', {
+      paneIds,
+      promptPlan,
+    });
+    if (!injectResult?.ok) {
+      throw new Error(injectResult?.message || `自动准备第 ${options.roundNumber} 轮失败。`);
+    }
+
     submitResult = await ipcRenderer.invoke('submit-message-to-panes', { paneIds });
   } catch (error) {
     console.error('Failed to auto-submit generated round:', error);
@@ -1787,7 +1885,7 @@ async function prepareAndSubmitAutoRound(options = {}) {
 
 function getBusyStallPaneLabels(results = []) {
   return results
-    .filter((result) => result.busy && result.hasReply && result.busyStableMs >= BUSY_STALL_PAUSE_MS)
+    .filter((result) => result.completionState === 'stalled' || result.isStalledBusy)
     .map((result) => result.providerName || getPaneEntryById(result.paneId)?.providerName || 'Unknown AI');
 }
 
@@ -1978,9 +2076,6 @@ async function pollRoundCompletion(token, paneIds, automated) {
       return;
     }
 
-    applyProviderInspectionResults(inspection.results);
-    render();
-
     const failedInspection = inspection.results.find((result) => !result.ok);
     if (failedInspection) {
       await handleRoundFlowError({
@@ -2000,7 +2095,15 @@ async function pollRoundCompletion(token, paneIds, automated) {
       settledResults,
       completedCount,
       stalledResults,
-    } = settleInspectionResults(inspection.results, busyStableTracker, Date.now(), BUSY_STALL_PAUSE_MS);
+    } = settleInspectionResults(
+      inspection.results,
+      busyStableTracker,
+      Date.now(),
+      BUSY_STALL_PAUSE_MS,
+      AUTO_WAIT_POLL_INTERVAL_MS
+    );
+    applyProviderInspectionResults(settledResults);
+    render();
     setFeedback(`正在等待第 ${state.currentRoundNumber} 轮完成`, {
       meta: `已完成 ${completedCount} / ${paneIds.length}。`,
     });
@@ -2353,24 +2456,40 @@ async function submitCurrentDraft(options = {}) {
   let submitResult;
   try {
     if (state.draftPromptType && state.draftPromptType !== 'round-one') {
-      const nextRoundSources = getAutoRoundSources(state.draftPromptType);
-      const roundSources = Array.isArray(nextRoundSources)
-        ? nextRoundSources
-        : [];
-      const maxLengthPerSource = getAutoRoundSourceMaxLength(state.draftPromptType);
-      const prepareResult = await ipcRenderer.invoke('prepare-generated-round', {
-        promptType: state.draftPromptType,
+      const shouldReusePromptPlan = Boolean(
+        state.currentPromptPlan
+          && state.currentPromptPlan.promptType === state.draftPromptType
+          && hasMatchingPromptPlanTargets(state.currentPromptPlan, paneIds)
+          && String(
+            state.currentPromptPlan.draftDisplayText
+              || state.currentPromptPlan.baseDraftText
+              || ''
+          ).trim() === state.draft.trim()
+      );
+      const promptPlanResult = shouldReusePromptPlan
+        ? {
+          ok: true,
+          promptPlan: state.currentPromptPlan,
+        }
+        : await rebuildCurrentGeneratedPromptPlan({
+          roundNumber: state.currentRoundNumber,
+          promptType: state.draftPromptType,
+          paneIds,
+          baseDraft: state.draft,
+        });
+
+      if (!promptPlanResult?.ok || !promptPlanResult?.promptPlan) {
+        throw new Error(promptPlanResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
+      }
+
+      state.currentPromptPlan = promptPlanResult.promptPlan;
+      const injectResult = await ipcRenderer.invoke('inject-prompt-plan', {
         paneIds,
-        sources: roundSources,
-        baseDraft: state.draft,
-        topic: state.topic,
-        taskTypeId: state.taskTypeId,
-        summarizerName: state.summarizerProviderName,
-        maxLengthPerSource,
+        promptPlan: state.currentPromptPlan,
       });
 
-      if (!prepareResult?.ok) {
-        throw new Error(prepareResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
+      if (!injectResult?.ok) {
+        throw new Error(injectResult?.message || `第 ${state.currentRoundNumber} 轮发送准备失败。`);
       }
     } else {
       const mirrorResult = await mirrorDraftToTargetPanesNow();

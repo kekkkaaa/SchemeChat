@@ -1,4 +1,5 @@
 const { ipcRenderer } = require('electron');
+const { verifyWriteAcrossReadbacks } = require('./provider-write-verifier');
 const {
   loadConfig,
   collectElementsBySelectors,
@@ -508,12 +509,24 @@ function injectText(text) {
     : { ok: false, stage: 'text-inject-failed', error: 'Input element not found.' };
 }
 
-function injectSyncText(text) {
+async function injectSyncText(text) {
   resetAppendState();
-  const wrote = writeInputText(String(text || ''));
-  return wrote
-    ? { ok: true, stage: 'sync-text-injected' }
-    : { ok: false, stage: 'sync-text-inject-failed', error: 'Input element not found.' };
+  const expectedText = String(text || '');
+  const wrote = writeInputText(expectedText);
+  if (!wrote) {
+    return { ok: false, stage: 'sync-text-inject-failed', error: 'Input element not found.' };
+  }
+
+  return verifyWriteAcrossReadbacks(
+    expectedText,
+    () => readGeminiEditorText(resolveInputElement()),
+    {
+      delaysMs: [0, 120, 360, 720],
+      normalizer: normalizeGeminiText,
+      successStage: 'sync-text-injected',
+      failureStage: 'sync-text-verify-failed',
+    }
+  );
 }
 
 function dispatchGeminiEnterSubmit(element) {

@@ -1,3 +1,5 @@
+const { getLatestRoundMaterialSources } = require('../main/discussion/material-store');
+
 const MODE_OPTIONS = [
   {
     id: 'fast-3',
@@ -730,7 +732,7 @@ function getAutoRoundSourceMaxLength(promptType) {
 }
 
 function getAutoRoundSources(config) {
-  return buildLatestRoundMaterialSources(config);
+  return getLatestRoundMaterialSources(config);
 }
 
 module.exports = {

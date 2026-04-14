@@ -1,3 +1,11 @@
+const {
+  createCompletionTracker,
+  evaluateCompletionObservation,
+  isCompletedCompletionState,
+  mapCompletionReasonToLegacyStatusReason,
+  mapCompletionStateToLegacyStatus,
+} = require('../main/discussion/completion-policy');
+
 function getCompletedPaneIdsFromTracks(paneIds = [], providerTracks = {}) {
   return paneIds.filter((paneId) => {
     const track = providerTracks?.[paneId];
@@ -32,7 +40,10 @@ function buildFallbackRoundResultsFromTracks(paneIds = [], providerTracks = {}, 
       hasReply: true,
       hasUsableReply: true,
       replyQuality: 'usable',
+      completionState: 'completed',
+      completionReason: 'track-cache',
       status: 'completed',
+      statusReason: 'track-cache',
       error: null,
     };
   }).filter(Boolean);
@@ -62,40 +73,44 @@ function mergeRoundResults(primaryResults = [], fallbackResults = [], orderedPan
     });
 }
 
-function settleInspectionResults(results = [], busyStableTracker = new Map(), now = Date.now(), stallPauseMs = 45000) {
+function settleInspectionResults(
+  results = [],
+  completionTracker = new Map(),
+  now = Date.now(),
+  stallPauseMs = 45000,
+  pollIntervalMs = 1500
+) {
   const settledResults = results.map((result) => {
-    const latestReplyText = String(result?.latestReplyText || '');
-    const hasAnyReply = Boolean(result?.hasReply) && Boolean(latestReplyText);
-    const hasUsableReply = result?.hasUsableReply !== undefined
-      ? Boolean(result.hasUsableReply) && hasAnyReply
-      : hasAnyReply;
-    const previous = busyStableTracker.get(result.paneId) || {
-      latestReplyText: '',
-      unchangedSince: 0,
-    };
-
-    let unchangedSince = 0;
-    if (result.busy && hasAnyReply) {
-      unchangedSince = previous.latestReplyText === latestReplyText
-        ? (previous.unchangedSince || now)
-        : now;
-    }
-
-    busyStableTracker.set(result.paneId, {
-      latestReplyText,
-      unchangedSince,
+    const tracker = completionTracker.get(result?.paneId) || createCompletionTracker();
+    const evaluation = evaluateCompletionObservation(result, tracker, {
+      now,
+      stallMs: stallPauseMs,
+      pollIntervalMs,
+      stablePassesRequired: 2,
+      minIdleStableMs: pollIntervalMs,
+      requireStableCompletion: true,
+      allowSnapshotCompletion: false,
     });
-
-    const busyStableMs = unchangedSince > 0 ? now - unchangedSince : 0;
-    const isEffectivelyCompleted = !result.busy && hasUsableReply;
+    completionTracker.set(result?.paneId, evaluation.nextTracker);
+    const completionState = evaluation.completionState;
+    const isEffectivelyCompleted = isCompletedCompletionState(completionState);
 
     return {
       ...result,
-      hasReply: hasAnyReply,
-      hasUsableReply,
-      busyStableMs,
+      latestReplyText: evaluation.latestReplyText,
+      replyLength: evaluation.replyLength,
+      hasReply: evaluation.hasReply,
+      hasUsableReply: evaluation.hasUsableReply,
+      replyQuality: evaluation.replyQuality,
+      completionState,
+      completionReason: evaluation.completionReason,
+      status: mapCompletionStateToLegacyStatus(completionState, evaluation),
+      statusReason: mapCompletionReasonToLegacyStatusReason(completionState, evaluation),
+      stablePasses: evaluation.stablePasses,
+      busyStableMs: evaluation.busyStableMs,
+      idleStableMs: evaluation.idleStableMs,
       isEffectivelyCompleted,
-      isStalledBusy: result.busy && hasAnyReply && busyStableMs >= stallPauseMs,
+      isStalledBusy: completionState === 'stalled',
     };
   });
 
@@ -112,9 +127,8 @@ function shouldAttemptStableCapture(settledResults = []) {
   }
 
   return settledResults.every((result) => {
-    const latestReplyText = String(result?.latestReplyText || '');
-    const hasAnyReply = Boolean(result?.hasReply) && Boolean(latestReplyText);
-    return Boolean(result?.isEffectivelyCompleted) || (!result?.busy && hasAnyReply);
+    return isCompletedCompletionState(result?.completionState)
+      || Boolean(result?.isEffectivelyCompleted);
   });
 }
 
@@ -124,10 +138,13 @@ function getMissingCapturedPaneIds(paneIds = [], capturedResults = []) {
       const hasUsableReply = result?.hasUsableReply !== undefined
         ? Boolean(result.hasUsableReply)
         : Boolean(String(result?.latestReplyText || '').trim());
+      const hasCompletedReply = result?.completionState
+        ? isCompletedCompletionState(result.completionState)
+        : hasUsableReply;
 
       return result?.paneId === paneId
         && result?.ok
-        && hasUsableReply
+        && hasCompletedReply
         && String(result?.latestReplyText || '').trim();
     });
   });

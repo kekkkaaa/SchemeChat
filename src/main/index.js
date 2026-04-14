@@ -10,6 +10,16 @@ const {
   inspectProviderView,
   syncPaneEntries,
 } = require('./sync');
+const {
+  evaluateCompletionObservation,
+  mapCompletionReasonToLegacyStatusReason,
+  mapCompletionStateToLegacyStatus,
+} = require('./discussion/completion-policy');
+const {
+  buildPromptPlan,
+  getPromptPlanPromptMap,
+  normalizePromptPlan,
+} = require('./discussion/prompt-plan-builder');
 const windowManager = require('./window-manager');
 const { getProviderCompatibility } = require('./provider-compatibility');
 const { createSchemeChatMcpServer } = require('./codex-mcp-server');
@@ -591,31 +601,24 @@ async function submitMessageToPaneIds(paneIds) {
 }
 
 function buildInspectionPayload(paneEntry, inspectionResult) {
-  const latestReplyText = inspectionResult?.latestReplyText || inspectionResult?.text || '';
-  const hasReply = Boolean(latestReplyText);
-  const hasUsableReply = inspectionResult?.hasUsableReply !== undefined
-    ? Boolean(inspectionResult.hasUsableReply) && hasReply
-    : hasReply;
-  const status = !inspectionResult?.ok
-    ? 'failed'
-    : inspectionResult?.busy
-      ? 'waiting'
-      : hasUsableReply
-        ? 'completed'
-        : hasReply
-          ? 'waiting'
-          : 'idle';
-  const statusReason = !inspectionResult?.ok
-    ? (hasReply && !hasUsableReply ? 'weak-reply' : 'inspection-failed')
-    : inspectionResult?.busy
-      ? 'provider-busy'
-      : hasUsableReply
-        ? 'usable-reply'
-        : hasReply
-          ? `weak-reply:${inspectionResult?.replyQuality || 'weak'}`
-          : inspectionResult?.sourceMethod === 'dom-pending'
-            ? 'pending-latest-reply'
-            : 'no-reply';
+  const evaluation = evaluateCompletionObservation(inspectionResult, {}, {
+    requireStableCompletion: false,
+    allowSnapshotCompletion: true,
+  });
+  const completionState = String(inspectionResult?.completionState || evaluation.completionState || '').trim()
+    || evaluation.completionState;
+  const completionReason = String(inspectionResult?.completionReason || evaluation.completionReason || '').trim()
+    || evaluation.completionReason;
+  const latestReplyText = evaluation.latestReplyText;
+  const hasReply = evaluation.hasReply;
+  const hasUsableReply = evaluation.hasUsableReply;
+  const status = inspectionResult?.status
+    || mapCompletionStateToLegacyStatus(completionState, evaluation);
+  const statusReason = inspectionResult?.statusReason
+    || mapCompletionReasonToLegacyStatusReason(completionState, {
+      ...evaluation,
+      completionReason,
+    });
 
   return {
     paneId: paneEntry.id,
@@ -624,19 +627,32 @@ function buildInspectionPayload(paneEntry, inspectionResult) {
     url: paneEntry?.view?.webContents?.getURL?.() || '',
     title: paneEntry?.view?.webContents?.getTitle?.() || '',
     isLoading: Boolean(paneEntry?.view?.webContents?.isLoading?.()),
-    ok: Boolean(inspectionResult?.ok),
-    busy: Boolean(inspectionResult?.busy),
+    ok: inspectionResult?.ok !== undefined
+      ? Boolean(inspectionResult.ok)
+      : completionState !== 'hard_error',
+    busy: evaluation.busy,
     latestReplyText,
     replyLength: latestReplyText.length,
     hasReply,
     hasUsableReply,
-    replyQuality: inspectionResult?.replyQuality || (hasUsableReply ? 'usable' : hasReply ? 'weak' : 'missing'),
-    confidence: Number.isFinite(inspectionResult?.confidence) ? inspectionResult.confidence : 0,
-    sourceMethod: inspectionResult?.sourceMethod || 'dom',
-    diagnostics: inspectionResult?.diagnostics || {},
+    replyQuality: evaluation.replyQuality,
+    confidence: evaluation.confidence,
+    sourceMethod: evaluation.sourceMethod,
+    diagnostics: evaluation.diagnostics,
     error: inspectionResult?.error || null,
     status,
     statusReason,
+    completionState,
+    completionReason,
+    stablePasses: Number.isFinite(inspectionResult?.stablePasses)
+      ? inspectionResult.stablePasses
+      : evaluation.stablePasses,
+    busyStableMs: Number.isFinite(inspectionResult?.busyStableMs)
+      ? inspectionResult.busyStableMs
+      : evaluation.busyStableMs,
+    idleStableMs: Number.isFinite(inspectionResult?.idleStableMs)
+      ? inspectionResult.idleStableMs
+      : evaluation.idleStableMs,
   };
 }
 
@@ -809,6 +825,142 @@ async function requestPaneActionForPaneEntries(paneEntries, channel, payloadBuil
       });
     });
   });
+}
+
+function serializePromptPlanForResponse(promptPlan = {}) {
+  const normalizedPlan = normalizePromptPlan(promptPlan);
+  if (!normalizedPlan) {
+    return null;
+  }
+
+  return {
+    planType: normalizedPlan.planType,
+    planVersion: normalizedPlan.planVersion,
+    planId: normalizedPlan.planId,
+    roundNumber: normalizedPlan.roundNumber,
+    promptType: normalizedPlan.promptType,
+    generatedAt: normalizedPlan.generatedAt,
+    baseDraftText: normalizedPlan.baseDraftText,
+    draftDisplayText: normalizedPlan.draftDisplayText,
+    usedDraftScaffold: normalizedPlan.usedDraftScaffold,
+    sourceSnapshot: normalizedPlan.sourceSnapshot,
+    sourceMaterialHashes: normalizedPlan.sourceMaterialHashes,
+    targetPaneIds: normalizedPlan.targetPaneIds,
+    panePlans: normalizedPlan.panePlans.map((entry) => ({
+      paneId: entry.paneId,
+      providerName: entry.providerName,
+      finalPromptText: entry.finalPromptText,
+      promptHash: entry.promptHash,
+      sourceMaterialHashes: entry.sourceMaterialHashes,
+    })),
+    previewPrompt: normalizedPlan.previewPrompt,
+  };
+}
+
+function buildGeneratedRoundPromptPlanForPaneEntries(paneEntries, payload = {}) {
+  const promptType = String(payload?.promptType || '').trim();
+  if (!promptType) {
+    return {
+      ok: false,
+      message: 'Prompt type is required.',
+      promptPlan: null,
+    };
+  }
+
+  const promptPlan = buildPromptPlan({
+    paneEntries: paneEntries.map((paneEntry) => ({
+      id: paneEntry.id,
+      providerName: getPaneLabel(paneEntry),
+    })),
+    roundNumber: payload?.roundNumber,
+    promptType,
+    sources: Array.isArray(payload?.sources) ? payload.sources : [],
+    baseDraft: payload?.baseDraft,
+    useDraftScaffold: Boolean(payload?.useDraftScaffold),
+    topic: payload?.topic || '',
+    taskTypeId: payload?.taskTypeId || '',
+    summarizerName: payload?.summarizerName || '',
+    maxLengthPerSource: payload?.maxLengthPerSource,
+  });
+
+  if (!promptPlan) {
+    return {
+      ok: false,
+      message: `No prompt could be generated for ${promptType}.`,
+      promptPlan: null,
+    };
+  }
+
+  const invalidPrompt = promptPlan.panePlans.find((entry) => !entry.finalPromptText);
+  if (invalidPrompt) {
+    return {
+      ok: false,
+      message: `${invalidPrompt.providerName} has no prompt to inject for ${promptType}.`,
+      promptPlan: null,
+    };
+  }
+
+  return {
+    ok: true,
+    promptPlan,
+  };
+}
+
+async function deliverPromptPlanToPaneEntries(paneEntries, promptPlan) {
+  const normalizedPlan = normalizePromptPlan(promptPlan);
+  if (!normalizedPlan) {
+    return {
+      ok: false,
+      message: 'Prompt plan is invalid.',
+      results: [],
+      promptPlan: null,
+      prompts: [],
+    };
+  }
+
+  const promptByPaneId = getPromptPlanPromptMap(normalizedPlan);
+  const promptHashByPaneId = new Map(
+    normalizedPlan.panePlans.map((entry) => [entry.paneId, entry.promptHash])
+  );
+  const missingPaneEntry = paneEntries.find((paneEntry) => !promptByPaneId.has(paneEntry.id));
+  if (missingPaneEntry) {
+    return {
+      ok: false,
+      message: `${getPaneLabel(missingPaneEntry)} is missing a prompt in the current prompt plan.`,
+      results: [],
+      promptPlan: normalizedPlan,
+      prompts: normalizedPlan.panePlans.map((entry) => ({
+        paneId: entry.paneId,
+        providerName: entry.providerName,
+        prompt: entry.finalPromptText,
+        promptHash: entry.promptHash,
+      })),
+    };
+  }
+
+  const deliveryResult = await requestPaneActionForPaneEntries(
+    paneEntries,
+    'inject-sync-text',
+    (paneEntry) => ({
+      text: promptByPaneId.get(paneEntry.id) || '',
+      promptHash: promptHashByPaneId.get(paneEntry.id) || '',
+    }),
+    {
+      action: 'inject-sync-text',
+      timeoutError: 'Timed out while waiting for prompt injection.',
+    }
+  );
+
+  return {
+    ...deliveryResult,
+    promptPlan: normalizedPlan,
+    prompts: normalizedPlan.panePlans.map((entry) => ({
+      paneId: entry.paneId,
+      providerName: entry.providerName,
+      prompt: entry.finalPromptText,
+      promptHash: entry.promptHash,
+    })),
+  };
 }
 
 function buildPrivateNewChatResponse(paneEntries, receivedResults) {
@@ -1260,6 +1412,96 @@ app.on('ready', async () => {
     return captureProviderRoundResultsForPaneIds(payload?.paneIds);
   });
 
+  ipcMain.handle('build-generated-round-plan', async (event, payload = {}) => {
+    const paneEntries = getTargetPaneEntries(payload?.paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+        promptPlan: null,
+      };
+    }
+
+    const planResult = buildGeneratedRoundPromptPlanForPaneEntries(paneEntries, payload);
+    if (!planResult.ok || !planResult.promptPlan) {
+      return {
+        ok: false,
+        message: planResult.message || 'Failed to build prompt plan.',
+        promptPlan: null,
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Built ${planResult.promptPlan.promptType} prompt plan for ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+      promptPlan: serializePromptPlanForResponse(planResult.promptPlan),
+      previewPrompt: planResult.promptPlan.previewPrompt || '',
+      baseDraftText: planResult.promptPlan.baseDraftText || '',
+    };
+  });
+
+  ipcMain.handle('inject-prompt-plan', async (event, payload = {}) => {
+    const normalizedPromptPlan = normalizePromptPlan(payload?.promptPlan);
+    if (!normalizedPromptPlan) {
+      return {
+        ok: false,
+        message: 'Prompt plan is required.',
+        promptPlan: null,
+        prompts: [],
+        results: [],
+      };
+    }
+
+    const paneIds = Array.isArray(payload?.paneIds) && payload.paneIds.length > 0
+      ? payload.paneIds
+      : normalizedPromptPlan.targetPaneIds;
+    const paneEntries = getTargetPaneEntries(paneIds);
+    if (paneEntries.length === 0) {
+      return {
+        ok: false,
+        message: 'No target panes were found.',
+        promptPlan: serializePromptPlanForResponse(normalizedPromptPlan),
+        prompts: [],
+        results: [],
+      };
+    }
+
+    if (paneEntries.length !== paneIds.length) {
+      return {
+        ok: false,
+        message: 'Some target panes are no longer available for the current prompt plan.',
+        promptPlan: serializePromptPlanForResponse(normalizedPromptPlan),
+        prompts: normalizedPromptPlan.panePlans.map((entry) => ({
+          paneId: entry.paneId,
+          providerName: entry.providerName,
+          prompt: entry.finalPromptText,
+          promptHash: entry.promptHash,
+        })),
+        results: [],
+      };
+    }
+
+    const deliveryResult = await deliverPromptPlanToPaneEntries(paneEntries, normalizedPromptPlan);
+    if (!deliveryResult?.ok) {
+      return {
+        ok: false,
+        message: deliveryResult?.message || 'Failed to inject prompt plan.',
+        promptPlan: serializePromptPlanForResponse(deliveryResult?.promptPlan || normalizedPromptPlan),
+        prompts: deliveryResult?.prompts || [],
+        results: deliveryResult?.results || [],
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Injected ${normalizedPromptPlan.promptType} prompt plan into ${paneEntries.length} pane${paneEntries.length > 1 ? 's' : ''}.`,
+      promptPlan: serializePromptPlanForResponse(deliveryResult.promptPlan),
+      prompts: deliveryResult.prompts,
+      results: deliveryResult.results,
+      previewPrompt: deliveryResult.promptPlan?.previewPrompt || '',
+    };
+  });
+
   ipcMain.handle('prepare-generated-round', async (event, payload = {}) => {
     const paneEntries = getTargetPaneEntries(payload?.paneIds);
     if (paneEntries.length === 0) {
@@ -1270,89 +1512,38 @@ app.on('ready', async () => {
       };
     }
 
-    const promptType = String(payload?.promptType || '').trim();
-    if (!promptType) {
-      return {
-        ok: false,
-        message: 'Prompt type is required.',
-        prompts: [],
-      };
-    }
-
-    const sourceEntries = Array.isArray(payload?.sources)
-      ? payload.sources
-      : [];
-
-    const prompts = paneEntries.map((paneEntry) => {
-      const scopedSources = sourceEntries.filter((source) => {
-        return Boolean(source?.paneId) && source.paneId !== paneEntry.id;
-      });
-
-      const promptOptions = {
-        topic: payload?.topic || '',
-        taskTypeId: payload?.taskTypeId || '',
-        summarizerName: payload?.summarizerName || getPaneLabel(paneEntry),
-        maxLengthPerSource: payload?.maxLengthPerSource,
-      };
-      const prompt = String(payload?.baseDraft || '').trim()
-        ? buildRoundPromptFromDraft(promptType, payload.baseDraft, scopedSources, promptOptions)
-        : buildRoundPrompt(promptType, scopedSources, promptOptions);
-
-      return {
-        paneEntry,
-        paneId: paneEntry.id,
-        providerName: getPaneLabel(paneEntry),
-        prompt,
-      };
+    const planResult = buildGeneratedRoundPromptPlanForPaneEntries(paneEntries, {
+      ...payload,
+      useDraftScaffold: Boolean(payload?.baseDraft) && payload?.useDraftScaffold !== false,
     });
-
-    const invalidPrompt = prompts.find((entry) => !entry.prompt);
-    if (invalidPrompt) {
+    if (!planResult.ok || !planResult.promptPlan) {
       return {
         ok: false,
-        message: `${invalidPrompt.providerName} has no prompt to inject for ${promptType}.`,
+        message: planResult.message || 'Failed to prepare prompt plan.',
         prompts: [],
+        promptPlan: null,
       };
     }
 
-    const promptByPaneId = new Map(
-      prompts.map((entry) => [entry.paneId, entry.prompt])
-    );
-    const deliveryResult = await requestPaneActionForPaneEntries(
-      prompts.map((entry) => entry.paneEntry),
-      'inject-sync-text',
-      (paneEntry) => ({
-        text: promptByPaneId.get(paneEntry.id) || '',
-      }),
-      {
-        action: 'inject-sync-text',
-        timeoutError: 'Timed out while waiting for prompt injection.',
-      }
-    );
+    const deliveryResult = await deliverPromptPlanToPaneEntries(paneEntries, planResult.promptPlan);
 
     if (!deliveryResult?.ok) {
       return {
         ok: false,
-        message: deliveryResult?.message || `Failed to prepare ${promptType}.`,
-        prompts: prompts.map((entry) => ({
-          paneId: entry.paneId,
-          providerName: entry.providerName,
-          prompt: entry.prompt,
-        })),
+        message: deliveryResult?.message || `Failed to prepare ${planResult.promptPlan.promptType}.`,
+        prompts: deliveryResult?.prompts || [],
         results: deliveryResult?.results || [],
+        promptPlan: serializePromptPlanForResponse(deliveryResult?.promptPlan || planResult.promptPlan),
       };
     }
 
     return {
       ok: true,
-      message: `Prepared ${promptType} for ${prompts.length} pane${prompts.length > 1 ? 's' : ''}.`,
+      message: `Prepared ${planResult.promptPlan.promptType} for ${deliveryResult.prompts.length} pane${deliveryResult.prompts.length > 1 ? 's' : ''}.`,
       results: deliveryResult.results,
-      prompts: prompts.map((entry) => ({
-        paneId: entry.paneId,
-        providerName: entry.providerName,
-        prompt: entry.prompt,
-      })),
-      previewPrompt: prompts[0]?.prompt || '',
+      prompts: deliveryResult.prompts,
+      promptPlan: serializePromptPlanForResponse(deliveryResult.promptPlan),
+      previewPrompt: deliveryResult.promptPlan?.previewPrompt || '',
     };
   });
 
