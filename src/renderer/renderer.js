@@ -31,11 +31,13 @@ const {
 } = require('./discussion-core');
 const {
   buildFallbackRoundResultsFromTracks: buildFallbackRoundResultsFromAutoRun,
+  buildSettledReplyFallbackResults,
   getCompletedPaneIdsFromTracks,
   getMissingCapturedPaneIds,
   getSkippablePaneIdsFromTracks,
   mergeRoundResults,
   settleInspectionResults,
+  shouldDegradeStableWeakReplies,
   shouldAttemptStableCapture,
 } = require('./discussion-auto-run');
 const {
@@ -2121,7 +2123,12 @@ async function pollRoundCompletion(token, paneIds, automated) {
       return;
     }
 
-    const readyForStableCapture = shouldAttemptStableCapture(settledResults);
+    const degradeWeakRepliesForThisRound = shouldDegradeStableWeakReplies(settledResults, {
+      elapsedMs: Date.now() - state.roundStartedAt,
+      minElapsedMs: Math.min(45000, Math.floor(AUTO_WAIT_TIMEOUT_MS / 2)),
+      requiredStablePasses: 3,
+    });
+    const readyForStableCapture = shouldAttemptStableCapture(settledResults) || degradeWeakRepliesForThisRound;
     if (readyForStableCapture) {
       let captureResult;
 
@@ -2132,14 +2139,6 @@ async function pollRoundCompletion(token, paneIds, automated) {
         if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
           setFeedback(`正在等待第 ${state.currentRoundNumber} 轮稳定收口`, {
             meta: '系统已经检测到各 AI 都有回复，但仍在等待最终稳定文本版本。',
-          });
-          await delay(AUTO_WAIT_POLL_INTERVAL_MS);
-          continue;
-        }
-        if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
-          const readyCount = paneIds.length - missingPaneIds.length;
-          setFeedback(`正在等待第 ${state.currentRoundNumber} 轮稳定收口`, {
-            meta: `已抓到 ${readyCount} / ${paneIds.length} 条稳定回复，系统会继续收束剩余结果。`,
           });
           await delay(AUTO_WAIT_POLL_INTERVAL_MS);
           continue;
@@ -2160,13 +2159,17 @@ async function pollRoundCompletion(token, paneIds, automated) {
       }
 
       const completedResults = normalizeCapturedRoundResults(captureResult?.results);
-      const missingPaneIds = getMissingCapturedPaneIds(paneIds, completedResults);
-      const fullyCaptured = completedResults.length === paneIds.length && missingPaneIds.length === 0;
+      const fallbackResults = degradeWeakRepliesForThisRound
+        ? buildSettledReplyFallbackResults(settledResults, paneIds)
+        : [];
+      const mergedResults = mergeRoundResults(completedResults, fallbackResults, paneIds);
+      const missingPaneIds = getMissingCapturedPaneIds(paneIds, mergedResults);
+      const fullyCaptured = mergedResults.length === paneIds.length && missingPaneIds.length === 0;
 
       if (!fullyCaptured) {
         const failedCapture = captureResult?.results?.find((result) => !result.ok);
-        if (completedResults.length > 0) {
-          applyProviderInspectionResults(completedResults);
+        if (mergedResults.length > 0) {
+          applyProviderInspectionResults(mergedResults);
           render();
         }
         if (Date.now() - state.roundStartedAt < AUTO_WAIT_TIMEOUT_MS) {
@@ -2192,15 +2195,15 @@ async function pollRoundCompletion(token, paneIds, automated) {
         return;
       }
 
-      applyProviderInspectionResults(completedResults);
-      recordCompletedRound(completedResults);
+      applyProviderInspectionResults(mergedResults);
+      recordCompletedRound(mergedResults);
       clearFlowErrorStates();
 
       const mode = getModeOption();
       if (state.currentRoundNumber >= mode.totalRounds) {
         await finishDiscussion({
           automated,
-          finalResult: completedResults[0] || null,
+          finalResult: mergedResults[0] || null,
         });
         return;
       }

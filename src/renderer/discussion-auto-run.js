@@ -49,6 +49,47 @@ function buildFallbackRoundResultsFromTracks(paneIds = [], providerTracks = {}, 
   }).filter(Boolean);
 }
 
+function buildSettledReplyFallbackResults(results = [], orderedPaneIds = []) {
+  const resultMap = new Map();
+  (Array.isArray(results) ? results : []).forEach((result) => {
+    const latestReplyText = String(result?.latestReplyText || result?.text || '').trim();
+    if (!result?.paneId || !result?.ok || !latestReplyText) {
+      return;
+    }
+
+    if (!['completed', 'weak_reply'].includes(result.completionState)) {
+      return;
+    }
+
+    resultMap.set(result.paneId, {
+      ...result,
+      latestReplyText,
+      ok: true,
+      busy: false,
+      hasReply: true,
+      hasUsableReply: true,
+      sourceMethod: result.sourceMethod || (result.completionState === 'weak_reply' ? 'weak-reply-fallback' : 'inspection-cache'),
+      completionState: 'completed',
+      completionReason: result.completionState === 'weak_reply'
+        ? `accepted-${result.completionReason || result.replyQuality || 'weak-reply'}`
+        : (result.completionReason || 'inspection-cache'),
+      status: 'completed',
+      statusReason: result.completionState === 'weak_reply'
+        ? `accepted-${result.statusReason || result.completionReason || 'weak-reply'}`
+        : (result.statusReason || result.completionReason || 'inspection-cache'),
+      degradedFromWeakReply: result.completionState === 'weak_reply',
+    });
+  });
+
+  const orderedIds = Array.isArray(orderedPaneIds) && orderedPaneIds.length > 0
+    ? orderedPaneIds
+    : Array.from(resultMap.keys());
+
+  return orderedIds
+    .map((paneId) => resultMap.get(paneId))
+    .filter(Boolean);
+}
+
 function mergeRoundResults(primaryResults = [], fallbackResults = [], orderedPaneIds = []) {
   const resultMap = new Map();
   fallbackResults.forEach((result) => {
@@ -121,6 +162,41 @@ function settleInspectionResults(
   };
 }
 
+function shouldDegradeStableWeakReplies(settledResults = [], options = {}) {
+  if (!Array.isArray(settledResults) || settledResults.length === 0) {
+    return false;
+  }
+
+  const elapsedMs = Number.isFinite(options.elapsedMs) ? options.elapsedMs : 0;
+  const minElapsedMs = Number.isFinite(options.minElapsedMs) ? Math.max(0, options.minElapsedMs) : 30000;
+  const minimumCompletedCount = Number.isFinite(options.minimumCompletedCount)
+    ? Math.max(0, Math.floor(options.minimumCompletedCount))
+    : Math.max(1, settledResults.length - 1);
+  const requiredStablePasses = Number.isFinite(options.requiredStablePasses)
+    ? Math.max(1, Math.floor(options.requiredStablePasses))
+    : 3;
+
+  if (elapsedMs < minElapsedMs) {
+    return false;
+  }
+
+  const completedCount = settledResults.filter((result) => result.isEffectivelyCompleted).length;
+  if (completedCount < minimumCompletedCount) {
+    return false;
+  }
+
+  return settledResults.every((result) => {
+    if (result.isEffectivelyCompleted) {
+      return true;
+    }
+
+    return result.completionState === 'weak_reply'
+      && result.hasReply
+      && !result.busy
+      && result.stablePasses >= requiredStablePasses;
+  });
+}
+
 function shouldAttemptStableCapture(settledResults = []) {
   if (!Array.isArray(settledResults) || settledResults.length === 0) {
     return false;
@@ -152,10 +228,12 @@ function getMissingCapturedPaneIds(paneIds = [], capturedResults = []) {
 
 module.exports = {
   buildFallbackRoundResultsFromTracks,
+  buildSettledReplyFallbackResults,
   getCompletedPaneIdsFromTracks,
   getMissingCapturedPaneIds,
   getSkippablePaneIdsFromTracks,
   mergeRoundResults,
   settleInspectionResults,
+  shouldDegradeStableWeakReplies,
   shouldAttemptStableCapture,
 };
