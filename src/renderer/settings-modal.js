@@ -158,11 +158,19 @@ function renderPaneList() {
   buildDraftPanes().forEach((pane, index) => {
     const paneNode = document.createElement('div');
     paneNode.className = 'pane-item';
-    paneNode.innerHTML = `
-      <strong>Pane ${index + 1}</strong>
-      <span>${pane.providerName || pane.providerKey || 'ChatGPT'}</span>
-      <span>${pane.id}</span>
-    `;
+
+    const title = document.createElement('strong');
+    title.textContent = `Pane ${index + 1}`;
+
+    const providerLabel = document.createElement('span');
+    providerLabel.textContent = pane.providerName || pane.providerKey || 'ChatGPT';
+
+    const paneId = document.createElement('span');
+    paneId.textContent = pane.id || `pane-${index + 1}`;
+
+    paneNode.appendChild(title);
+    paneNode.appendChild(providerLabel);
+    paneNode.appendChild(paneId);
     paneList.appendChild(paneNode);
   });
 }

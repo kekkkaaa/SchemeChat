@@ -1,6 +1,7 @@
 name: Build and Release Assets
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -14,6 +15,12 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
 
     steps:
       - name: Checkout code
@@ -25,13 +32,10 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Setup macOS code signing
-        if: matrix.os == 'macos-latest'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        if: matrix.os == 'macos-latest' && env.MACOS_CERTIFICATE != '' && env.MACOS_CERTIFICATE_PASSWORD != ''
         run: |
           # Decode certificate
           echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
@@ -52,16 +56,13 @@ jobs:
       - name: Build for macOS
         if: matrix.os == 'macos-latest'
         env:
-          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CSC_LINK: ${{ env.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ env.MACOS_CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.MACOS_CERTIFICATE != '' && 'true' || 'false' }}
         run: npm run build -- --mac --publish never
 
       - name: Notarize macOS app
-        if: matrix.os == 'macos-latest'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        if: matrix.os == 'macos-latest' && env.APPLE_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' && env.APPLE_TEAM_ID != ''
         run: |
           # Find the DMG file
           DMG_PATH=$(find dist -name "*.dmg" -type f | head -n 1)

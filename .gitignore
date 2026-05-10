@@ -1,10 +1,15 @@
 node_modules/
 dist/
 build/
+.idea/
+logs/
 *.log
+*.exe
 .DS_Store
 npm-debug.log*
 .env
 .env.local
+config/settings-window.json
+config/window-layout.json
 config/window-providers.json
 .vercel
